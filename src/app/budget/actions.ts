@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
 import { invalidateBudgetCache } from "@/lib/queries";
+import { isValidNumber } from "@/lib/validation";
 
 const BUDGET_ROUTE = "/budget/[month]";
 
@@ -31,6 +32,7 @@ export async function setAssigned(
   categoryId: number,
   amount: number
 ): Promise<void> {
+  if (!isValidNumber(amount)) return;
   upsertAssignment(month, categoryId, Math.round(amount));
   refresh();
 }
@@ -40,6 +42,7 @@ export async function setMonthlyTarget(
   categoryId: number,
   amount: number | null
 ): Promise<void> {
+  if (amount != null && !isValidNumber(amount)) return;
   db.update(schema.categories)
     .set({ monthlyTarget: amount == null ? null : Math.round(amount) })
     .where(eq(schema.categories.id, categoryId))
@@ -55,6 +58,7 @@ export async function fundToGoal(month: string, categoryId: number): Promise<voi
     .where(eq(schema.categories.id, categoryId))
     .get();
   if (!category || category.monthlyTarget == null) return;
+  if (!isValidNumber(category.monthlyTarget)) return;
   upsertAssignment(month, categoryId, category.monthlyTarget);
   refresh();
 }

@@ -18,6 +18,7 @@ import {
   invalidateBudgetCache,
   type TransactionEditInput,
 } from "@/lib/queries";
+import { isValidNumber } from "@/lib/validation";
 // `refresh` lives here (not this file) because every export of a "use
 // server" module must itself be an async server action.
 import { refresh } from "./refresh";
@@ -112,6 +113,7 @@ export interface TransactionFormInput {
 export async function createTransactionAction(input: TransactionFormInput): Promise<ActionResult> {
   if (!input.date) return { ok: false, error: "Date is required." };
   if (input.amount === 0) return { ok: false, error: "Enter an outflow or inflow amount." };
+  if (!isValidNumber(input.amount)) return { ok: false, error: "Amount is not a valid number." };
 
   createTransactionRow(db, {
     accountId: input.accountId,
@@ -140,6 +142,7 @@ export interface TransferFormInput {
 export async function createTransferAction(input: TransferFormInput): Promise<ActionResult> {
   if (!input.date) return { ok: false, error: "Date is required." };
   if (input.amount === 0) return { ok: false, error: "Enter an amount." };
+  if (!isValidNumber(input.amount)) return { ok: false, error: "Amount is not a valid number." };
   if (input.fromAccountId === input.toAccountId) {
     return { ok: false, error: "Choose a different account to transfer to." };
   }
@@ -165,6 +168,7 @@ export async function updateTransactionAction(
 ): Promise<ActionResult> {
   if (!input.date) return { ok: false, error: "Date is required." };
   if (input.amount === 0) return { ok: false, error: "Enter an outflow or inflow amount." };
+  if (!isValidNumber(input.amount)) return { ok: false, error: "Amount is not a valid number." };
 
   updateTransactionRow(db, id, {
     date: input.date,

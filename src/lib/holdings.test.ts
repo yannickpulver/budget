@@ -45,7 +45,8 @@ CREATE TABLE transactions (
   amount INTEGER NOT NULL,
   cleared INTEGER NOT NULL DEFAULT 0,
   transfer_account_id INTEGER,
-  import_hash TEXT
+  import_hash TEXT,
+  transfer_pair_id TEXT
 );
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE holdings (

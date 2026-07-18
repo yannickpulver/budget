@@ -27,6 +27,12 @@ import { computePaymentCategoryAdjustments, type PaymentCategoryAdjustment } fro
 const PLAN_DIR = path.join(process.cwd(), "plan");
 const BATCH_SIZE = 300;
 
+/** True once anything has ever been imported/entered — the migration is about to wipe it all. */
+function hasExistingData(): boolean {
+  const row = sqlite.prepare("SELECT COUNT(*) AS c FROM transactions").get() as { c: number };
+  return row.c > 0;
+}
+
 function findCsv(pattern: RegExp): string {
   const files = fs.readdirSync(PLAN_DIR);
   const match = files.find((f) => pattern.test(f));
@@ -125,6 +131,7 @@ function runImport(result: ImportResult) {
         amount: txn.amount,
         cleared: txn.cleared,
         transferAccountId,
+        transferPairId: txn.transferPairId,
       };
     });
     db.insert(transactions).values(rows).run();
@@ -291,6 +298,22 @@ function formatRappen(amount: number): string {
 }
 
 function main() {
+  const force = process.argv.includes("--force");
+  if (!force && hasExistingData()) {
+    console.error(
+      "\nRefusing to run: the database already has transactions.\n\n" +
+        "This script is a ONE-TIME YNAB migration — it WIPES every transaction,\n" +
+        "account, category, group, and assignment, then replaces them with a\n" +
+        "fresh import from the CSVs in plan/. It's meant to be run once, before\n" +
+        "you start using newbudget day to day, not as an ongoing sync.\n\n" +
+        "If you're sure you want to discard the current data and re-import,\n" +
+        "re-run with --force:\n\n" +
+        "  pnpm migrate:ynab --force\n"
+    );
+    process.exitCode = 1;
+    return;
+  }
+
   const registerPath = findCsv(/register\.csv$/i);
   const planPath = findCsv(/plan\.csv$/i);
 
