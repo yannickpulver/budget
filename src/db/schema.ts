@@ -81,8 +81,20 @@ export const holdings = sqliteTable("holdings", {
 
 export const prices = sqliteTable("prices", {
   symbol: text("symbol").primaryKey(),
+  // Always in the budget's currency minor units (converted at fetch time if
+  // the quote's native currency differs — see `currency`/`fxRate` below).
   priceRappen: integer("price_rappen").notNull(),
   fetchedAt: text("fetched_at").notNull(),
+  // Native quote currency reported by the price source, e.g. "USD". Null
+  // until first successfully fetched.
+  currency: text("currency"),
+  // Native -> budget-currency rate applied to produce priceRappen. Null when
+  // the quote's currency already matches the budget currency.
+  fxRate: real("fx_rate"),
+  // Set when the most recent fetch attempt failed; priceRappen/fetchedAt
+  // keep the last successful value so the UI can show a stale/error hint
+  // without losing the cached price. Cleared on the next successful fetch.
+  fetchError: text("fetch_error"),
 });
 
 export const settings = sqliteTable("settings", {
