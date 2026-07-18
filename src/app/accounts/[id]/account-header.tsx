@@ -5,10 +5,17 @@ import { useState, useTransition } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/currency";
 import type { AccountDetail } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { closeAccountAction, deleteAccountAction, renameAccountAction, reopenAccountAction } from "../actions";
+import {
+  closeAccountAction,
+  deleteAccountAction,
+  renameAccountAction,
+  reopenAccountAction,
+  updateAccountTypeAction,
+} from "../actions";
 
 const TYPE_LABEL: Record<AccountDetail["type"], string> = {
   checking: "Checking",
@@ -17,6 +24,8 @@ const TYPE_LABEL: Record<AccountDetail["type"], string> = {
   credit: "Credit card",
   tracking: "Tracking",
 };
+
+const ACCOUNT_TYPES = Object.keys(TYPE_LABEL) as AccountDetail["type"][];
 
 function balanceClass(value: number): string {
   return value < 0 ? "text-red-600" : "text-foreground";
@@ -42,6 +51,15 @@ export function AccountHeader({ detail }: { detail: AccountDetail }) {
         setError(result.error);
         setName(detail.name);
       }
+    });
+  }
+
+  function changeType(type: AccountDetail["type"]) {
+    if (type === detail.type) return;
+    setError(null);
+    startTransition(async () => {
+      const result = await updateAccountTypeAction(detail.id, type);
+      if (!result.ok) setError(result.error);
     });
   }
 
@@ -100,7 +118,25 @@ export function AccountHeader({ detail }: { detail: AccountDetail }) {
                 {detail.name}
               </button>
             )}
-            <Badge variant="outline">{TYPE_LABEL[detail.type]}</Badge>
+            <Select
+              value={detail.type}
+              onValueChange={(v) => changeType(v as AccountDetail["type"])}
+              disabled={pending}
+            >
+              <SelectTrigger
+                size="sm"
+                className="h-6 w-auto gap-1 rounded-full border-none bg-muted px-2.5 text-xs font-medium shadow-none"
+              >
+                <SelectValue>{TYPE_LABEL[detail.type]}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {ACCOUNT_TYPES.map((type) => (
+                  <SelectItem key={type} value={type}>
+                    {TYPE_LABEL[type]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {detail.closed && <Badge variant="secondary">Closed</Badge>}
           </div>
 

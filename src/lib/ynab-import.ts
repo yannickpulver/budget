@@ -362,6 +362,43 @@ function buildPlanAvailable(planRows: PlanRow[]): PlanAvailableEntry[] {
   return entries;
 }
 
+/** YYYY-MM-DD minus N months (calendar subtraction, UTC). */
+function subtractMonths(isoDate: string, months: number): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1 - months, day));
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Accounts to auto-close on import: zero balance and no activity in the 12
+ * months before the export's last transaction date — i.e. dead accounts
+ * nobody remembered to close in YNAB. Fully generic (dates + amounts only,
+ * no hardcoded names).
+ */
+export function detectAutoCloseAccounts(
+  accountNames: string[],
+  transactions: ImportedTransaction[]
+): string[] {
+  let lastDate: string | null = null;
+  const lastDateByAccount = new Map<string, string>();
+  const balanceByAccount = new Map<string, number>();
+
+  for (const txn of transactions) {
+    if (lastDate === null || txn.date > lastDate) lastDate = txn.date;
+    const prev = lastDateByAccount.get(txn.accountName);
+    if (prev == null || txn.date > prev) lastDateByAccount.set(txn.accountName, txn.date);
+    balanceByAccount.set(txn.accountName, (balanceByAccount.get(txn.accountName) ?? 0) + txn.amount);
+  }
+  if (lastDate === null) return [];
+  const cutoff = subtractMonths(lastDate, 12);
+
+  return accountNames.filter((name) => {
+    if ((balanceByAccount.get(name) ?? 0) !== 0) return false;
+    const accountLastDate = lastDateByAccount.get(name);
+    return accountLastDate == null || accountLastDate < cutoff;
+  });
+}
+
 export function buildImportResult(registerRows: RegisterRow[], planRows: PlanRow[]): ImportResult {
   const accountTypes = detectAccountTypes(registerRows);
   const accountNames = new Set(accountTypes.keys());

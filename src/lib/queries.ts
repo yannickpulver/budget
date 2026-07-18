@@ -333,6 +333,30 @@ export function getBudgetView(month: string): BudgetView {
 }
 
 /**
+ * Add `delta` to a category's assignment amount for `month`, inserting the
+ * row if it doesn't exist yet. Used by the YNAB migration's payment-category
+ * reconciliation (see `src/lib/reconciliation.ts`) to book a correction as
+ * an additional assignment rather than overwriting Available directly.
+ */
+export function adjustAssignment(dbi: DB, month: string, categoryId: number, delta: number): void {
+  const existing = dbi
+    .select({ amount: schema.assignments.amount })
+    .from(schema.assignments)
+    .where(and(eq(schema.assignments.month, month), eq(schema.assignments.categoryId, categoryId)))
+    .get();
+  const amount = (existing?.amount ?? 0) + delta;
+  if (existing) {
+    dbi
+      .update(schema.assignments)
+      .set({ amount })
+      .where(and(eq(schema.assignments.month, month), eq(schema.assignments.categoryId, categoryId)))
+      .run();
+  } else {
+    dbi.insert(schema.assignments).values({ month, categoryId, amount }).run();
+  }
+}
+
+/**
  * Accounts sidebar, account register and transaction/transfer mutations.
  *
  * These functions take an explicit `dbi` (falling back to the app-wide `db`)
@@ -681,6 +705,15 @@ export function renameAccount(dbi: DB, id: number, name: string): void {
 
 export function setAccountClosed(dbi: DB, id: number, closed: boolean): void {
   dbi.update(schema.accounts).set({ closed }).where(eq(schema.accounts.id, id)).run();
+}
+
+/**
+ * Switching between on-budget and tracking legitimately changes Ready to
+ * Assign — that's the point (e.g. a mis-detected investment account can be
+ * flipped to tracking). No special-casing here.
+ */
+export function setAccountType(dbi: DB, id: number, type: AccountType): void {
+  dbi.update(schema.accounts).set({ type }).where(eq(schema.accounts.id, id)).run();
 }
 
 export function deleteAccount(dbi: DB, id: number): void {

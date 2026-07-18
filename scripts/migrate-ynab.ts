@@ -10,6 +10,7 @@ import {
 } from "../src/db/schema";
 import {
   buildImportResult,
+  detectAutoCloseAccounts,
   parsePlanCsv,
   parseRegisterCsv,
   type ImportResult,
@@ -20,6 +21,8 @@ import {
   type AccountInfo,
   type TxnInput,
 } from "../src/lib/budget-math";
+import { adjustAssignment, setAccountClosed } from "../src/lib/queries";
+import { computePaymentCategoryAdjustments, type PaymentCategoryAdjustment } from "../src/lib/reconciliation";
 
 const PLAN_DIR = path.join(process.cwd(), "plan");
 const BATCH_SIZE = 300;
@@ -140,6 +143,17 @@ function runImport(result: ImportResult) {
     if (rows.length > 0) db.insert(assignments).values(rows).run();
   }
 
+  // Auto-close: zero balance, no activity in the 12 months before the
+  // export's last transaction date — a dead account nobody closed in YNAB.
+  const autoClosedAccountNames = detectAutoCloseAccounts(
+    result.accounts.map((a) => a.name),
+    result.transactions
+  );
+  for (const name of autoClosedAccountNames) {
+    const id = accountIdByName.get(name);
+    if (id != null) setAccountClosed(db, id, true);
+  }
+
   return {
     groupIdByName,
     categoryIdByKey,
@@ -147,52 +161,40 @@ function runImport(result: ImportResult) {
     paymentCategoryIdByAccount,
     resolvedTransactions,
     resolvedAssignments,
+    autoClosedAccountNames,
   };
 }
 
-function verify(
-  result: ImportResult,
-  categoryIdByKey: Map<string, number>,
-  accountIdByName: Map<string, number>,
-  paymentCategoryIdByAccount: Map<string, number>,
-  resolvedTransactions: ResolvedTxn[],
-  resolvedAssignments: Map<string, number>
-) {
-  const accountInfoById = new Map<number, AccountInfo>();
-  for (const account of result.accounts) {
-    const id = accountIdByName.get(account.name)!;
-    accountInfoById.set(id, {
-      id,
-      type: account.type,
-      paymentCategoryId: paymentCategoryIdByAccount.get(account.name) ?? null,
-    });
-  }
+interface MonthWalk {
+  availableByMonth: Map<string, Map<number, number>>;
+  rtaByMonth: Map<string, number>;
+}
 
-  const allCategoryIds = Array.from(categoryIdByKey.values());
-  const paymentCategoryIds = new Set(paymentCategoryIdByAccount.values());
-
-  const months = Array.from(new Set(result.planAvailable.map((p) => p.month))).sort();
-
-  const txnsByMonth = new Map<string, ResolvedTxn[]>();
-  for (const txn of resolvedTransactions) {
-    const m = monthKey(txn.date);
-    const list = txnsByMonth.get(m) ?? [];
-    list.push(txn);
-    txnsByMonth.set(m, list);
-  }
-
+/**
+ * Walk every month forward once, computing each category's Available and
+ * Ready to Assign. Shared by the reconciliation step and the verification
+ * report so both read from the exact same replay.
+ */
+function walkAllMonths(
+  months: string[],
+  categoryIds: number[],
+  accountInfoById: Map<number, AccountInfo>,
+  resolvedAssignments: Map<string, number>,
+  txnsByMonth: Map<string, ResolvedTxn[]>
+): MonthWalk {
   let prevAvailable = new Map<number, number>();
   let cumulativeFunds = 0;
   const availableByMonth = new Map<string, Map<number, number>>();
+  const rtaByMonth = new Map<string, number>();
 
   for (const month of months) {
     const assignedByCategory = new Map<number, number>();
-    for (const categoryId of allCategoryIds) {
+    for (const categoryId of categoryIds) {
       const amount = resolvedAssignments.get(`${month}:${categoryId}`);
       if (amount != null) assignedByCategory.set(categoryId, amount);
     }
     const snapshot = computeMonthSnapshot({
-      categoryIds: allCategoryIds,
+      categoryIds,
       prevAvailable,
       assignedByCategory,
       monthTransactions: txnsByMonth.get(month) ?? [],
@@ -203,24 +205,30 @@ function verify(
       Array.from(snapshot.categories.entries()).map(([id, s]) => [id, s.available])
     );
     cumulativeFunds = snapshot.cumulativeOnBudgetFunds;
-    availableByMonth.set(
-      month,
-      new Map(Array.from(snapshot.categories.entries()).map(([id, s]) => [id, s.available]))
-    );
+    availableByMonth.set(month, new Map(prevAvailable));
+    rtaByMonth.set(month, snapshot.readyToAssign);
   }
 
-  const last12Months = months.slice(-12);
+  return { availableByMonth, rtaByMonth };
+}
 
-  interface Diff {
-    month: string;
-    groupName: string;
-    categoryName: string;
-    expected: number;
-    actual: number;
-    diff: number;
-    isCreditPayment: boolean;
-  }
+interface Diff {
+  month: string;
+  groupName: string;
+  categoryName: string;
+  expected: number;
+  actual: number;
+  diff: number;
+  isCreditPayment: boolean;
+}
 
+function buildVerificationDiffs(
+  result: ImportResult,
+  categoryIdByKey: Map<string, number>,
+  paymentCategoryIds: Set<number>,
+  availableByMonth: Map<string, Map<number, number>>,
+  last12Months: string[]
+) {
   const diffs: Diff[] = [];
   for (const entry of result.planAvailable) {
     if (!last12Months.includes(entry.month)) continue;
@@ -252,6 +260,21 @@ function verify(
     .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff))
     .slice(0, 5);
 
+  return {
+    regularTotal: regular.length,
+    regularMatches: regularMatches.length,
+    regularMismatches: regularMismatches.length,
+    creditPaymentTotal: creditPayment.length,
+    creditMismatches: creditMismatches.length,
+    worst,
+    worstCreditPayment,
+  };
+}
+
+function computeAccountBalances(
+  accountIdByName: Map<string, number>,
+  resolvedTransactions: ResolvedTxn[]
+): Map<string, number> {
   const accountBalances = new Map<number, number>();
   for (const txn of resolvedTransactions) {
     accountBalances.set(txn.accountId, (accountBalances.get(txn.accountId) ?? 0) + txn.amount);
@@ -260,18 +283,7 @@ function verify(
   for (const [name, id] of accountIdByName) {
     balanceByAccountName.set(name, accountBalances.get(id) ?? 0);
   }
-
-  return {
-    last12Months,
-    regularTotal: regular.length,
-    regularMatches: regularMatches.length,
-    regularMismatches: regularMismatches.length,
-    creditPaymentTotal: creditPayment.length,
-    creditMismatches: creditMismatches.length,
-    worst,
-    worstCreditPayment,
-    balanceByAccountName,
-  };
+  return balanceByAccountName;
 }
 
 function formatRappen(amount: number): string {
@@ -295,6 +307,7 @@ function main() {
     paymentCategoryIdByAccount,
     resolvedTransactions,
     resolvedAssignments,
+    autoClosedAccountNames,
   } = sqlite.transaction(() => runImport(result))();
 
   console.log("\n=== Import summary ===");
@@ -307,17 +320,95 @@ function main() {
   console.log(`Transactions:    ${result.transactions.length}`);
   console.log(`Assignments:     ${result.assignments.length}`);
 
-  const report = verify(
+  console.log("\n=== Auto-closed accounts ===");
+  if (autoClosedAccountNames.length > 0) {
+    for (const name of autoClosedAccountNames) console.log(`  ${name}`);
+  } else {
+    console.log("  none");
+  }
+
+  // --- Reconciliation: snap every credit-payment category's Available at
+  // the export's final month to YNAB's own Plan.csv value, booked as an
+  // additional assignment. Only ever touches the final month.
+  const accountInfoById = new Map<number, AccountInfo>();
+  for (const account of result.accounts) {
+    const id = accountIdByName.get(account.name)!;
+    accountInfoById.set(id, {
+      id,
+      type: account.type,
+      paymentCategoryId: paymentCategoryIdByAccount.get(account.name) ?? null,
+    });
+  }
+
+  const allCategoryIds = Array.from(categoryIdByKey.values());
+  const paymentCategoryIds = new Set(paymentCategoryIdByAccount.values());
+
+  const txnsByMonth = new Map<string, ResolvedTxn[]>();
+  for (const txn of resolvedTransactions) {
+    const m = monthKey(txn.date);
+    const list = txnsByMonth.get(m) ?? [];
+    list.push(txn);
+    txnsByMonth.set(m, list);
+  }
+
+  const months = Array.from(new Set(result.planAvailable.map((p) => p.month))).sort();
+  const finalMonth = months.at(-1);
+
+  let adjustments: PaymentCategoryAdjustment[] = [];
+  let rtaBefore = 0;
+  let rtaAfter = 0;
+  let walkAfterAvailable = new Map<string, Map<number, number>>();
+
+  if (finalMonth != null) {
+    const walkBefore = walkAllMonths(months, allCategoryIds, accountInfoById, resolvedAssignments, txnsByMonth);
+    rtaBefore = walkBefore.rtaByMonth.get(finalMonth) ?? 0;
+
+    adjustments = computePaymentCategoryAdjustments({
+      creditCardLinks: result.creditCardLinks,
+      categoryIdByKey,
+      planAvailable: result.planAvailable,
+      ourAvailableAtMonth: walkBefore.availableByMonth.get(finalMonth) ?? new Map(),
+      month: finalMonth,
+    });
+
+    for (const adjustment of adjustments) {
+      adjustAssignment(db, adjustment.month, adjustment.categoryId, adjustment.delta);
+      resolvedAssignments.set(
+        `${adjustment.month}:${adjustment.categoryId}`,
+        (resolvedAssignments.get(`${adjustment.month}:${adjustment.categoryId}`) ?? 0) + adjustment.delta
+      );
+    }
+
+    const walkAfter = walkAllMonths(months, allCategoryIds, accountInfoById, resolvedAssignments, txnsByMonth);
+    rtaAfter = walkAfter.rtaByMonth.get(finalMonth) ?? 0;
+    walkAfterAvailable = walkAfter.availableByMonth;
+  }
+
+  console.log(`\n=== Reconciliation (${finalMonth ?? "n/a"}) ===`);
+  console.log(`Ready to Assign before: ${formatRappen(rtaBefore)}`);
+  if (adjustments.length > 0) {
+    for (const a of adjustments) {
+      console.log(
+        `  ${a.accountName}: plan available ${formatRappen(a.planAvailable)}, ours was ${formatRappen(a.ourAvailable)}, adjustment ${formatRappen(a.delta)}`
+      );
+    }
+  } else {
+    console.log("  no adjustments (all payment categories already matched Plan.csv)");
+  }
+  console.log(`Ready to Assign after:  ${formatRappen(rtaAfter)}`);
+
+  const last12Months = months.slice(-12);
+  const report = buildVerificationDiffs(
     result,
     categoryIdByKey,
-    accountIdByName,
-    paymentCategoryIdByAccount,
-    resolvedTransactions,
-    resolvedAssignments
+    paymentCategoryIds,
+    walkAfterAvailable,
+    last12Months
   );
+  const balanceByAccountName = computeAccountBalances(accountIdByName, resolvedTransactions);
 
   console.log("\n=== Verification report (last 12 months) ===");
-  console.log(`Months checked: ${report.last12Months[0]} .. ${report.last12Months.at(-1)}`);
+  console.log(`Months checked: ${last12Months[0]} .. ${last12Months.at(-1)}`);
   console.log(
     `Non-credit-payment category-months: ${report.regularTotal} total, ${report.regularMatches} matching, ${report.regularMismatches} mismatching` +
       ` (${((report.regularMatches / report.regularTotal) * 100).toFixed(2)}% match rate)`
@@ -348,7 +439,7 @@ function main() {
 
   console.log("\n=== Account balances ===");
   for (const account of result.accounts) {
-    console.log(`  ${account.name}: ${formatRappen(report.balanceByAccountName.get(account.name) ?? 0)}`);
+    console.log(`  ${account.name}: ${formatRappen(balanceByAccountName.get(account.name) ?? 0)}`);
   }
 
   if (report.regularMismatches > 0) {
