@@ -623,6 +623,191 @@ export function getCategoryOptions(dbi: DB = db): CategoryGroupOption[] {
     .filter((g) => g.categories.length > 0);
 }
 
+/**
+ * Category settings (`/settings/categories`): create/rename/hide/delete for
+ * groups and categories, plus the empty-DB starter-category seed.
+ */
+
+const DEFAULT_CATEGORY_SEED: { group: string; categories: string[] }[] = [
+  { group: "Spending", categories: ["Groceries", "Eating Out", "Transport", "Fun", "Home"] },
+  { group: "Bills", categories: ["Rent", "Health Insurance", "Subscriptions"] },
+  { group: "Saving", categories: ["Emergency Fund", "Travel"] },
+];
+
+/**
+ * Seed a small, generic starter category set the first time an account is
+ * created against an empty categories table. Only ever runs once — as soon
+ * as any category exists (seeded or user-created), it's a no-op. Everything
+ * seeded is a plain, renameable/hideable/deletable category — no special
+ * treatment.
+ */
+export function seedDefaultCategoriesIfEmpty(dbi: DB): void {
+  const existing = dbi.select({ id: schema.categories.id }).from(schema.categories).all();
+  if (existing.length > 0) return;
+
+  let groupSort = 0;
+  for (const { group, categories } of DEFAULT_CATEGORY_SEED) {
+    const groupResult = dbi
+      .insert(schema.categoryGroups)
+      .values({ name: group, sort: groupSort++ })
+      .run();
+    const groupId = Number(groupResult.lastInsertRowid);
+    let catSort = 0;
+    for (const name of categories) {
+      dbi.insert(schema.categories).values({ groupId, name, sort: catSort++ }).run();
+    }
+  }
+}
+
+export interface CategoryAdmin {
+  id: number;
+  name: string;
+  sort: number;
+  hidden: boolean;
+  monthlyTarget: number | null;
+  /** Used by a transaction, an assignment, or as a credit account's payment category — delete is blocked, hide only. */
+  referenced: boolean;
+}
+
+export interface CategoryGroupAdmin {
+  id: number;
+  name: string;
+  sort: number;
+  hidden: boolean;
+  categories: CategoryAdmin[];
+}
+
+/** Full groups+categories tree (including hidden) for the settings page. */
+export function listCategoryGroupsAdmin(dbi: DB = db): CategoryGroupAdmin[] {
+  const groups = dbi.select().from(schema.categoryGroups).all();
+  const categoryRows = dbi.select().from(schema.categories).all();
+
+  const referencedIds = new Set<number>();
+  for (const row of dbi
+    .select({ categoryId: schema.transactions.categoryId })
+    .from(schema.transactions)
+    .all()) {
+    if (row.categoryId != null) referencedIds.add(row.categoryId);
+  }
+  for (const row of dbi.select({ categoryId: schema.assignments.categoryId }).from(schema.assignments).all()) {
+    referencedIds.add(row.categoryId);
+  }
+  for (const row of dbi
+    .select({ paymentCategoryId: schema.accounts.paymentCategoryId })
+    .from(schema.accounts)
+    .all()) {
+    if (row.paymentCategoryId != null) referencedIds.add(row.paymentCategoryId);
+  }
+
+  const byGroup = new Map<number, CategoryAdmin[]>();
+  for (const c of [...categoryRows].sort((a, b) => a.sort - b.sort)) {
+    const list = byGroup.get(c.groupId) ?? [];
+    list.push({
+      id: c.id,
+      name: c.name,
+      sort: c.sort,
+      hidden: c.hidden,
+      monthlyTarget: c.monthlyTarget,
+      referenced: referencedIds.has(c.id),
+    });
+    byGroup.set(c.groupId, list);
+  }
+
+  return [...groups]
+    .sort((a, b) => a.sort - b.sort)
+    .map((g) => ({
+      id: g.id,
+      name: g.name,
+      sort: g.sort,
+      hidden: g.hidden,
+      categories: byGroup.get(g.id) ?? [],
+    }));
+}
+
+export function createCategoryGroup(dbi: DB, name: string): number {
+  const maxSort = dbi
+    .select({ maxSort: sql<number | null>`max(${schema.categoryGroups.sort})` })
+    .from(schema.categoryGroups)
+    .get();
+  const sort = (maxSort?.maxSort ?? -1) + 1;
+  const result = dbi.insert(schema.categoryGroups).values({ name, sort }).run();
+  return Number(result.lastInsertRowid);
+}
+
+export function renameCategoryGroup(dbi: DB, id: number, name: string): void {
+  dbi.update(schema.categoryGroups).set({ name }).where(eq(schema.categoryGroups.id, id)).run();
+}
+
+export function setCategoryGroupHidden(dbi: DB, id: number, hidden: boolean): void {
+  dbi.update(schema.categoryGroups).set({ hidden }).where(eq(schema.categoryGroups.id, id)).run();
+}
+
+export type SettingsResult = { ok: true } | { ok: false; error: string };
+
+/** Groups can only be deleted while empty — hide it (or move/delete its categories first) otherwise. */
+export function deleteCategoryGroup(dbi: DB, id: number): SettingsResult {
+  const count = dbi
+    .select({ id: schema.categories.id })
+    .from(schema.categories)
+    .where(eq(schema.categories.groupId, id))
+    .all().length;
+  if (count > 0) return { ok: false, error: "Remove its categories first, or hide the group instead." };
+  dbi.delete(schema.categoryGroups).where(eq(schema.categoryGroups.id, id)).run();
+  return { ok: true };
+}
+
+export function createCategory(dbi: DB, groupId: number, name: string): number {
+  const maxSort = dbi
+    .select({ maxSort: sql<number | null>`max(${schema.categories.sort})` })
+    .from(schema.categories)
+    .where(eq(schema.categories.groupId, groupId))
+    .get();
+  const sort = (maxSort?.maxSort ?? -1) + 1;
+  const result = dbi.insert(schema.categories).values({ groupId, name, sort }).run();
+  return Number(result.lastInsertRowid);
+}
+
+export function renameCategory(dbi: DB, id: number, name: string): void {
+  dbi.update(schema.categories).set({ name }).where(eq(schema.categories.id, id)).run();
+}
+
+export function setCategoryHidden(dbi: DB, id: number, hidden: boolean): void {
+  dbi.update(schema.categories).set({ hidden }).where(eq(schema.categories.id, id)).run();
+}
+
+function isCategoryReferenced(dbi: DB, id: number): boolean {
+  const txn = dbi
+    .select({ id: schema.transactions.id })
+    .from(schema.transactions)
+    .where(eq(schema.transactions.categoryId, id))
+    .limit(1)
+    .all();
+  if (txn.length > 0) return true;
+  const assignment = dbi
+    .select({ categoryId: schema.assignments.categoryId })
+    .from(schema.assignments)
+    .where(eq(schema.assignments.categoryId, id))
+    .limit(1)
+    .all();
+  if (assignment.length > 0) return true;
+  const payment = dbi
+    .select({ id: schema.accounts.id })
+    .from(schema.accounts)
+    .where(eq(schema.accounts.paymentCategoryId, id))
+    .limit(1)
+    .all();
+  return payment.length > 0;
+}
+
+/** Categories can only be deleted while unreferenced (no transactions/assignments/payment link) — hide otherwise. */
+export function deleteCategory(dbi: DB, id: number): SettingsResult {
+  if (isCategoryReferenced(dbi, id)) {
+    return { ok: false, error: "Category is in use — hide it instead of deleting." };
+  }
+  dbi.delete(schema.categories).where(eq(schema.categories.id, id)).run();
+  return { ok: true };
+}
+
 export interface AccountRef {
   id: number;
   name: string;
@@ -668,9 +853,12 @@ export interface CreateAccountInput {
  * Create an account and, if non-zero, a "Starting Balance" transaction.
  * Uncategorized (categoryId null) for every account type — for on-budget
  * accounts that lands in Ready to Assign; tracking accounts aren't budgeted
- * so it's simply uncategorized.
+ * so it's simply uncategorized. Also seeds the starter category set the
+ * first time ever an account is created against an empty categories table.
  */
 export function createAccount(dbi: DB, input: CreateAccountInput): number {
+  seedDefaultCategoriesIfEmpty(dbi);
+
   const maxSort = dbi
     .select({ maxSort: sql<number | null>`max(${schema.accounts.sort})` })
     .from(schema.accounts)
