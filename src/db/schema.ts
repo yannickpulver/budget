@@ -55,6 +55,11 @@ export const transactions = sqliteTable("transactions", {
     (): typeof accounts.id => accounts.id
   ),
   importHash: text("import_hash"),
+  // Stable link between a transfer's two legs (crypto.randomUUID()). Null for
+  // legacy rows created before this column existed and for non-transfer rows
+  // — `findMirrorLeg` in queries.ts falls back to the old
+  // account/date/amount heuristic for those.
+  transferPairId: text("transfer_pair_id"),
 });
 
 export const assignments = sqliteTable(
@@ -100,4 +105,19 @@ export const prices = sqliteTable("prices", {
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
+});
+
+// Idempotency ledger for the ongoing per-account CSV import's commit step.
+// `id` is a client-supplied uuid minted once at preview time; a retried or
+// resubmitted confirm with the same id is a no-op (see `commitImport` in
+// queries.ts) rather than re-inserting every row a second time. Deliberately
+// not a uniqueness constraint on transaction content — legitimate duplicate
+// transactions are real data and must stay importable.
+export const importBatches = sqliteTable("import_batches", {
+  id: text("id").primaryKey(),
+  accountId: integer("account_id")
+    .notNull()
+    .references(() => accounts.id),
+  count: integer("count").notNull(),
+  committedAt: text("committed_at").notNull(),
 });

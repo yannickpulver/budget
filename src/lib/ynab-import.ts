@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { parse } from "csv-parse/sync";
 import type { AccountType } from "./budget-math";
 
@@ -106,6 +107,14 @@ export interface ImportedTransaction {
   amount: number;
   cleared: boolean;
   transferAccountName: string | null;
+  /**
+   * Stable link between this transfer's two legs, shared with its mirror
+   * row. Null for non-transfer rows and for the rare unbalanced case where
+   * one side of a same-account-pair/date/amount group has no counterpart
+   * (see `assignTransferPairIds`) — those fall back to the runtime
+   * account/date/amount heuristic in `queries.ts`.
+   */
+  transferPairId: string | null;
 }
 
 export interface ImportedAssignment {
@@ -324,8 +333,42 @@ function buildTransactions(registerRows: RegisterRow[], accountNames: Set<string
       amount,
       cleared: row.Cleared === "Cleared",
       transferAccountName,
+      transferPairId: null,
     };
   });
+}
+
+/**
+ * Stamp a shared `transferPairId` on each transfer's two legs, mutating the
+ * rows in place. Two same-day, same-amount transfers between the same
+ * account pair are common (e.g. a recurring standing order) and otherwise
+ * indistinguishable by (accountPair, date, amount) alone — YNAB's export
+ * carries no explicit link, so rows are grouped by that key and zipped with
+ * their opposite-direction counterpart *in file order*, which is a
+ * reasonable proxy for creation order within a group this small. Any
+ * leftover (unbalanced) rows in a group keep `transferPairId: null` and are
+ * resolved at runtime by the account/date/amount fallback heuristic.
+ */
+function assignTransferPairIds(transactions: ImportedTransaction[]): void {
+  const groups = new Map<string, { first: number[]; second: number[] }>();
+
+  transactions.forEach((txn, index) => {
+    if (txn.transferAccountName == null) return;
+    const [first, second] = [txn.accountName, txn.transferAccountName].sort();
+    const key = `${first}::${second}::${txn.date}::${Math.abs(txn.amount)}`;
+    const group = groups.get(key) ?? { first: [], second: [] };
+    (txn.accountName === first ? group.first : group.second).push(index);
+    groups.set(key, group);
+  });
+
+  for (const { first, second } of groups.values()) {
+    const pairCount = Math.min(first.length, second.length);
+    for (let i = 0; i < pairCount; i++) {
+      const pairId = randomUUID();
+      transactions[first[i]].transferPairId = pairId;
+      transactions[second[i]].transferPairId = pairId;
+    }
+  }
 }
 
 function buildAssignments(planRows: PlanRow[]): ImportedAssignment[] {
@@ -416,6 +459,7 @@ export function buildImportResult(registerRows: RegisterRow[], planRows: PlanRow
   }));
 
   const transactions = buildTransactions(registerRows, accountNames);
+  assignTransferPairIds(transactions);
   const assignments = buildAssignments(planRows);
   const planAvailable = buildPlanAvailable(planRows);
 

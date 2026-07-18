@@ -51,7 +51,8 @@ CREATE TABLE transactions (
   amount INTEGER NOT NULL,
   cleared INTEGER NOT NULL DEFAULT 0,
   transfer_account_id INTEGER,
-  import_hash TEXT
+  import_hash TEXT,
+  transfer_pair_id TEXT
 );
 CREATE TABLE assignments (
   month TEXT NOT NULL,

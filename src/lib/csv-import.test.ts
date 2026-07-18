@@ -176,7 +176,8 @@ CREATE TABLE transactions (
   amount INTEGER NOT NULL,
   cleared INTEGER NOT NULL DEFAULT 0,
   transfer_account_id INTEGER,
-  import_hash TEXT
+  import_hash TEXT,
+  transfer_pair_id TEXT
 );
 CREATE TABLE assignments (
   month TEXT NOT NULL,
@@ -185,6 +186,12 @@ CREATE TABLE assignments (
   PRIMARY KEY (month, category_id)
 );
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE import_batches (
+  id TEXT PRIMARY KEY,
+  account_id INTEGER NOT NULL,
+  count INTEGER NOT NULL,
+  committed_at TEXT NOT NULL
+);
 `;
 
 const CHECKING = 1;
@@ -303,9 +310,12 @@ describe("commitImport", () => {
   it("inserts the given rows with import_hash set and uncategorized when categoryId is null", () => {
     const dbi = makeDb();
     const hash = computeImportHash(CHECKING, "2025-03-15", -4250, "Coop");
-    const count = commitImport(dbi, CHECKING, [
-      { date: "2025-03-15", payee: "Coop", memo: "", amount: -4250, categoryId: null, importHash: hash },
-    ]);
+    const count = commitImport(
+      dbi,
+      CHECKING,
+      [{ date: "2025-03-15", payee: "Coop", memo: "", amount: -4250, categoryId: null, importHash: hash }],
+      "batch-1"
+    );
     expect(count).toBe(1);
 
     const rows = sqlite.prepare("SELECT * FROM transactions").all() as Array<{
@@ -331,25 +341,63 @@ describe("commitImport", () => {
 
   it("inserts a matched category id when provided", () => {
     const dbi = makeDb();
-    commitImport(dbi, CHECKING, [
-      {
-        date: "2025-03-15",
-        payee: "Coop",
-        memo: "",
-        amount: -4250,
-        categoryId: GROCERIES,
-        importHash: "h1",
-      },
-    ]);
+    commitImport(
+      dbi,
+      CHECKING,
+      [
+        {
+          date: "2025-03-15",
+          payee: "Coop",
+          memo: "",
+          amount: -4250,
+          categoryId: GROCERIES,
+          importHash: "h1",
+        },
+      ],
+      "batch-1"
+    );
     const row = sqlite.prepare("SELECT category_id FROM transactions").get() as { category_id: number };
     expect(row.category_id).toBe(GROCERIES);
   });
 
   it("does nothing for an empty row list", () => {
     const dbi = makeDb();
-    const count = commitImport(dbi, CHECKING, []);
+    const count = commitImport(dbi, CHECKING, [], "batch-1");
     expect(count).toBe(0);
     expect(sqlite.prepare("SELECT COUNT(*) as c FROM transactions").get()).toEqual({ c: 0 });
+  });
+
+  it("is idempotent: two commits with the same batchId insert once and both return the original count", () => {
+    const dbi = makeDb();
+    const rows = [
+      { date: "2025-03-15", payee: "Coop", memo: "", amount: -4250, categoryId: null, importHash: "h1" },
+      { date: "2025-03-16", payee: "Migros", memo: "", amount: -1000, categoryId: null, importHash: "h2" },
+    ];
+
+    const first = commitImport(dbi, CHECKING, rows, "retry-batch");
+    expect(first).toBe(2);
+
+    // Simulate a retried/resubmitted server action with the exact same rows
+    // and batchId (e.g. the client never saw the first response).
+    const second = commitImport(dbi, CHECKING, rows, "retry-batch");
+    expect(second).toBe(2);
+
+    const total = sqlite.prepare("SELECT COUNT(*) as c FROM transactions").get() as { c: number };
+    expect(total.c).toBe(2); // not 4 — the retry didn't re-insert
+  });
+
+  it("a different batchId with the same content still commits (not a content-based dedupe)", () => {
+    const dbi = makeDb();
+    const rows = [{ date: "2025-03-15", payee: "Coop", memo: "", amount: -4250, categoryId: null, importHash: "h1" }];
+
+    commitImport(dbi, CHECKING, rows, "batch-a");
+    commitImport(dbi, CHECKING, rows, "batch-b");
+
+    // Legitimate case: the user genuinely re-runs an import with an
+    // overlapping row (e.g. a duplicate they intentionally kept checked).
+    // Only same-batchId retries are deduped, not identical content.
+    const total = sqlite.prepare("SELECT COUNT(*) as c FROM transactions").get() as { c: number };
+    expect(total.c).toBe(2);
   });
 
   it("a full round trip (preview -> commit checked rows) leaves duplicates out when unchecked", () => {
@@ -379,7 +427,8 @@ describe("commitImport", () => {
         amount: r.amount,
         categoryId: r.categoryId,
         importHash: r.importHash,
-      }))
+      })),
+      "batch-1"
     );
     expect(inserted).toBe(1);
 

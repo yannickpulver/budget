@@ -9,14 +9,15 @@ import {
   updateHolding,
   type HoldingInput,
 } from "@/lib/queries";
+import { isValidNumber } from "@/lib/validation";
 import { refresh } from "../refresh";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
 function validateHoldingInput(input: HoldingInput): string | null {
   if (!input.symbol.trim()) return "Symbol is required.";
-  if (!Number.isFinite(input.quantity) || input.quantity <= 0) {
-    return "Enter a quantity greater than zero.";
+  if (input.quantity <= 0 || !isValidNumber(input.quantity)) {
+    return "Enter a valid quantity greater than zero.";
   }
   return null;
 }
