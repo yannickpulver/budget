@@ -8,7 +8,7 @@
  * `invalidateBudgetCache()` to drop the cache.
  */
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import {
   computeGoalStatus,
@@ -23,6 +23,7 @@ import {
 } from "./budget-math";
 import { computeImportHash, resolveCategoryName, type ParsedImportRow } from "./csv-import";
 import { formatMoney } from "./currency";
+import { fetchYahooQuote, fxSymbol, isStale, toBudgetMinorUnits } from "./prices";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
 
@@ -365,7 +366,7 @@ export function adjustAssignment(dbi: DB, month: string, categoryId: number, del
  * in tests, the same way `loadBudgetData`/`SnapshotStore` are tested above.
  */
 
-function getCurrency(dbi: DB): string {
+export function getCurrency(dbi: DB): string {
   const row = dbi
     .select()
     .from(schema.settings)
@@ -1002,4 +1003,230 @@ export function commitImport(dbi: DB, accountId: number, rows: ImportInsertRow[]
     )
     .run();
   return rows.length;
+}
+
+/**
+ * Investments (tracking-account holdings + Yahoo Finance price cache).
+ *
+ * Prices are cached by symbol (shared across accounts) and always stored
+ * already converted into the budget's currency — see `db/schema.ts` for why.
+ * `refreshHoldingPrices` is the only function in the app that ends up
+ * calling the network (via `./prices`), and only ever runs from the
+ * "Refresh prices" server action.
+ */
+
+export interface HoldingInput {
+  symbol: string;
+  name: string;
+  quantity: number;
+}
+
+export function createHolding(dbi: DB, accountId: number, input: HoldingInput): number {
+  const result = dbi
+    .insert(schema.holdings)
+    .values({ accountId, symbol: input.symbol, name: input.name, quantity: input.quantity })
+    .run();
+  return Number(result.lastInsertRowid);
+}
+
+export function updateHolding(dbi: DB, id: number, input: HoldingInput): void {
+  dbi
+    .update(schema.holdings)
+    .set({ symbol: input.symbol, name: input.name, quantity: input.quantity })
+    .where(eq(schema.holdings.id, id))
+    .run();
+}
+
+export function deleteHolding(dbi: DB, id: number): void {
+  dbi.delete(schema.holdings).where(eq(schema.holdings.id, id)).run();
+}
+
+export interface HoldingRow {
+  id: number;
+  symbol: string;
+  name: string;
+  quantity: number;
+  /** Latest cached price in the budget currency's minor units, null if never fetched. */
+  priceRappen: number | null;
+  /** quantity * priceRappen, rounded; null if priceRappen is null. */
+  valueRappen: number | null;
+  /** Native quote currency, e.g. "USD"; null until first fetch. */
+  currency: string | null;
+  /** Native -> budget rate applied, null if same currency or unconverted. */
+  fxRate: number | null;
+  fetchedAt: string | null;
+  fetchError: string | null;
+  stale: boolean;
+}
+
+export interface HoldingsView {
+  budgetCurrency: string;
+  holdings: HoldingRow[];
+  totalValueRappen: number;
+  /** False if any holding has never been priced — sync-balance stays disabled. */
+  hasAllPrices: boolean;
+  oldestFetchedAt: string | null;
+  /** True if any held symbol is missing a price or stale (>24h) — triggers an on-view auto refresh. */
+  needsRefresh: boolean;
+  accountBalance: number;
+}
+
+/** Everything the account page's Holdings section renders. */
+export function getHoldingsView(accountId: number, dbi: DB = db): HoldingsView {
+  const holdingRows = dbi
+    .select()
+    .from(schema.holdings)
+    .where(eq(schema.holdings.accountId, accountId))
+    .orderBy(schema.holdings.symbol)
+    .all();
+
+  const symbols = [...new Set(holdingRows.map((h) => h.symbol))];
+  const priceRows = symbols.length
+    ? dbi.select().from(schema.prices).where(inArray(schema.prices.symbol, symbols)).all()
+    : [];
+  const priceBySymbol = new Map(priceRows.map((p) => [p.symbol, p]));
+
+  let totalValueRappen = 0;
+  let hasAllPrices = true;
+  let oldestFetchedAt: string | null = null;
+  let needsRefresh = false;
+
+  const holdings: HoldingRow[] = holdingRows.map((h) => {
+    const p = priceBySymbol.get(h.symbol);
+    const priceRappen = p?.priceRappen ?? null;
+    const valueRappen = priceRappen != null ? Math.round(h.quantity * priceRappen) : null;
+    if (priceRappen == null) hasAllPrices = false;
+    if (valueRappen != null) totalValueRappen += valueRappen;
+    if (p?.fetchedAt && (oldestFetchedAt == null || p.fetchedAt < oldestFetchedAt)) {
+      oldestFetchedAt = p.fetchedAt;
+    }
+    const stale = isStale(p?.fetchedAt ?? null);
+    if (stale || p?.fetchError) needsRefresh = true;
+    return {
+      id: h.id,
+      symbol: h.symbol,
+      name: h.name,
+      quantity: h.quantity,
+      priceRappen,
+      valueRappen,
+      currency: p?.currency ?? null,
+      fxRate: p?.fxRate ?? null,
+      fetchedAt: p?.fetchedAt ?? null,
+      fetchError: p?.fetchError ?? null,
+      stale,
+    };
+  });
+
+  return {
+    budgetCurrency: getCurrency(dbi),
+    holdings,
+    totalValueRappen,
+    hasAllPrices,
+    oldestFetchedAt,
+    needsRefresh,
+    accountBalance: getAccountDetail(accountId, dbi)?.balance ?? 0,
+  };
+}
+
+export interface PriceRefreshResult {
+  updated: string[];
+  failed: { symbol: string; error: string }[];
+}
+
+/**
+ * Fetch fresh quotes for every symbol held by `accountId`, converting into
+ * the budget currency via a live FX quote when needed. A failed symbol
+ * keeps its last cached price/fetchedAt and records the error instead —
+ * never throws, never blocks the other symbols.
+ */
+export async function refreshHoldingPrices(dbi: DB, accountId: number): Promise<PriceRefreshResult> {
+  const symbols = [
+    ...new Set(
+      dbi
+        .select({ symbol: schema.holdings.symbol })
+        .from(schema.holdings)
+        .where(eq(schema.holdings.accountId, accountId))
+        .all()
+        .map((h) => h.symbol)
+    ),
+  ];
+
+  const budgetCurrency = getCurrency(dbi);
+  const fxRateByCurrency = new Map<string, number | null>();
+  const updated: string[] = [];
+  const failed: { symbol: string; error: string }[] = [];
+
+  function markFailed(symbol: string, error: string): void {
+    failed.push({ symbol, error });
+    const existing = dbi.select().from(schema.prices).where(eq(schema.prices.symbol, symbol)).get();
+    if (existing) {
+      dbi.update(schema.prices).set({ fetchError: error }).where(eq(schema.prices.symbol, symbol)).run();
+    }
+    // No existing row: leave unset — the UI just shows "not fetched yet" rather
+    // than a persisted error for a symbol that's never had a valid price.
+  }
+
+  for (const symbol of symbols) {
+    const quote = await fetchYahooQuote(symbol);
+    if (!quote.ok) {
+      markFailed(symbol, quote.error);
+      continue;
+    }
+
+    let fxRate: number | null = null;
+    if (quote.quote.currency !== budgetCurrency) {
+      if (!fxRateByCurrency.has(quote.quote.currency)) {
+        const fx = await fetchYahooQuote(fxSymbol(quote.quote.currency, budgetCurrency));
+        fxRateByCurrency.set(quote.quote.currency, fx.ok ? fx.quote.price : null);
+      }
+      fxRate = fxRateByCurrency.get(quote.quote.currency) ?? null;
+      if (fxRate == null) {
+        markFailed(symbol, `FX rate ${quote.quote.currency}→${budgetCurrency} unavailable`);
+        continue;
+      }
+    }
+
+    const priceRappen = toBudgetMinorUnits(quote.quote.price, fxRate);
+    const fetchedAt = new Date().toISOString();
+    const existing = dbi.select().from(schema.prices).where(eq(schema.prices.symbol, symbol)).get();
+    const values = { priceRappen, currency: quote.quote.currency, fxRate, fetchedAt, fetchError: null };
+    if (existing) {
+      dbi.update(schema.prices).set(values).where(eq(schema.prices.symbol, symbol)).run();
+    } else {
+      dbi.insert(schema.prices).values({ symbol, ...values }).run();
+    }
+    updated.push(symbol);
+  }
+
+  return { updated, failed };
+}
+
+/** Signed amount to book so the account balance becomes `portfolioValueRappen`; null if already equal. */
+export function computeSyncDelta(accountBalanceRappen: number, portfolioValueRappen: number): number | null {
+  const delta = portfolioValueRappen - accountBalanceRappen;
+  return delta === 0 ? null : delta;
+}
+
+export type SyncBalanceResult = { ok: true; delta: number } | { ok: false; error: string };
+
+/** Book an uncategorized "Balance Adjustment" transaction so the account balance matches total holdings value. */
+export function syncHoldingsBalance(dbi: DB, accountId: number): SyncBalanceResult {
+  const view = getHoldingsView(accountId, dbi);
+  if (view.holdings.length === 0) return { ok: false, error: "No holdings to sync." };
+  if (!view.hasAllPrices) return { ok: false, error: "Fetch prices before syncing." };
+
+  const delta = computeSyncDelta(view.accountBalance, view.totalValueRappen);
+  if (delta == null) return { ok: false, error: "Already in sync." };
+
+  createTransaction(dbi, {
+    accountId,
+    date: new Date().toISOString().slice(0, 10),
+    payee: "Balance Adjustment",
+    categoryId: null,
+    memo: "Synced to holdings value",
+    amount: delta,
+    cleared: true,
+  });
+
+  return { ok: true, delta };
 }
