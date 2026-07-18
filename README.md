@@ -82,7 +82,9 @@ about the starter set is special or hardcoded into the budget logic.
 
 The migration is a one-time CLI script — it wipes and reimports the local
 database from two CSV files you export from YNAB, so it's meant to be run
-once, before you start using newbudget day to day.
+once, before you start using newbudget day to day. Because it's destructive,
+it refuses to run if the database already has transactions in it unless you
+pass `--force`.
 
 1. In YNAB, export your budget: **Budget → (menu) → Export Budget Data**. You
    get a zip with, among others, `Register.csv` and `Plan.csv` for the
@@ -93,6 +95,16 @@ once, before you start using newbudget day to day.
 
    ```bash
    pnpm migrate:ynab
+   ```
+
+   If the database already has transactions (e.g. you're re-running the
+   migration after fixing something, or reimporting from scratch), the
+   script stops and explains that it's a one-time, wipe-and-replace
+   operation. Re-run with `--force` once you're sure you want to discard
+   what's there:
+
+   ```bash
+   pnpm migrate:ynab --force
    ```
 
 4. Read the verification report the script prints. It recomputes each

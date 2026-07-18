@@ -928,9 +928,30 @@ export function createTransaction(dbi: DB, input: TransactionInput): number {
 
 type TransferRow = typeof schema.transactions.$inferSelect;
 
-/** Find the mirror leg of a transfer by (account, other account, date, amount) — the schema has no pair id, per PLAN.md. */
+/**
+ * Find the mirror leg of a transfer. Resolved primarily by `transferPairId`
+ * — a stable id stamped on both legs at creation time — so two same-day,
+ * same-amount transfers between the same account pair never cross-match.
+ * Falls back to the old (account, other account, date, amount) heuristic
+ * only for legacy rows that predate the pair id column.
+ */
 function findMirrorLeg(dbi: DB, leg: TransferRow): TransferRow | null {
   if (leg.transferAccountId == null) return null;
+
+  if (leg.transferPairId != null) {
+    const byPairId = dbi
+      .select()
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.transferPairId, leg.transferPairId),
+          sql`${schema.transactions.id} != ${leg.id}`
+        )
+      )
+      .get();
+    if (byPairId) return byPairId;
+  }
+
   return (
     dbi
       .select()
@@ -1050,6 +1071,7 @@ export function createTransfer(dbi: DB, input: CreateTransferInput): { fromId: n
   const toCategoryId = !toIsTracking && fromIsTracking ? input.categoryId : null;
 
   const amount = Math.abs(input.amount);
+  const transferPairId = crypto.randomUUID();
 
   const fromResult = dbi
     .insert(schema.transactions)
@@ -1062,6 +1084,7 @@ export function createTransfer(dbi: DB, input: CreateTransferInput): { fromId: n
       amount: -amount,
       cleared: input.cleared,
       transferAccountId: input.toAccountId,
+      transferPairId,
     })
     .run();
 
@@ -1076,6 +1099,7 @@ export function createTransfer(dbi: DB, input: CreateTransferInput): { fromId: n
       amount,
       cleared: input.cleared,
       transferAccountId: input.fromAccountId,
+      transferPairId,
     })
     .run();
 
@@ -1172,25 +1196,49 @@ export interface ImportInsertRow {
   importHash: string;
 }
 
-/** Insert the checked import rows (uncategorized unless matched), stamping import_hash. */
-export function commitImport(dbi: DB, accountId: number, rows: ImportInsertRow[]): number {
-  if (rows.length === 0) return 0;
-  dbi
-    .insert(schema.transactions)
-    .values(
-      rows.map((r) => ({
-        accountId,
-        date: r.date,
-        payee: r.payee,
-        categoryId: r.categoryId,
-        memo: r.memo,
-        amount: r.amount,
-        cleared: true,
-        importHash: r.importHash,
-      }))
-    )
-    .run();
-  return rows.length;
+/**
+ * Insert the checked import rows (uncategorized unless matched), stamping
+ * import_hash. Idempotent per `batchId` (minted once by `previewImportAction`
+ * and carried through the confirm form): if this batch was already
+ * committed — e.g. a retried/resubmitted server action after the client
+ * never saw the response — this is a silent no-op that returns the row
+ * count from the original commit instead of inserting everything again.
+ * This is deliberately not a UNIQUE constraint on import content: two
+ * legitimately identical transactions (same date/payee/amount) are real
+ * data and must stay importable when the user checks them both.
+ */
+export function commitImport(dbi: DB, accountId: number, rows: ImportInsertRow[], batchId: string): number {
+  return dbi.transaction((tx) => {
+    const existing = tx
+      .select({ count: schema.importBatches.count })
+      .from(schema.importBatches)
+      .where(eq(schema.importBatches.id, batchId))
+      .get();
+    if (existing) return existing.count;
+
+    if (rows.length > 0) {
+      tx.insert(schema.transactions)
+        .values(
+          rows.map((r) => ({
+            accountId,
+            date: r.date,
+            payee: r.payee,
+            categoryId: r.categoryId,
+            memo: r.memo,
+            amount: r.amount,
+            cleared: true,
+            importHash: r.importHash,
+          }))
+        )
+        .run();
+    }
+
+    tx.insert(schema.importBatches)
+      .values({ id: batchId, accountId, count: rows.length, committedAt: new Date().toISOString() })
+      .run();
+
+    return rows.length;
+  });
 }
 
 /**

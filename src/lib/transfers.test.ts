@@ -56,7 +56,8 @@ CREATE TABLE transactions (
   amount INTEGER NOT NULL,
   cleared INTEGER NOT NULL DEFAULT 0,
   transfer_account_id INTEGER,
-  import_hash TEXT
+  import_hash TEXT,
+  transfer_pair_id TEXT
 );
 CREATE TABLE assignments (
   month TEXT NOT NULL,
@@ -96,6 +97,7 @@ function allTransactions() {
     amount: number;
     cleared: number;
     transfer_account_id: number | null;
+    transfer_pair_id: string | null;
   }>;
 }
 
@@ -136,6 +138,9 @@ describe("createTransfer", () => {
     expect(to.amount).toBe(10000);
     expect(to.transfer_account_id).toBe(CHECKING);
     expect(to.category_id).toBeNull();
+
+    expect(from.transfer_pair_id).not.toBeNull();
+    expect(from.transfer_pair_id).toBe(to.transfer_pair_id);
   });
 
   it("categorizes only the on-budget leg when the other side is a tracking account", () => {
@@ -309,5 +314,100 @@ describe("deleteTransaction on a transfer leg", () => {
     const rows = allTransactions();
     expect(rows).toHaveLength(1);
     expect(rows[0].payee).toBe("Tea");
+  });
+});
+
+/**
+ * Regression coverage for the mirror-leg desync bug: with two same-day,
+ * same-amount transfers between the same account pair, the old
+ * (account, other account, date, amount) heuristic can't tell the legs
+ * apart and may pick the wrong mirror. `transfer_pair_id` (stamped by
+ * `createTransfer`) resolves each leg to its own mirror unambiguously.
+ */
+describe("same-day, same-amount transfers between the same accounts", () => {
+  function createAmbiguousPair(dbi: ReturnType<typeof makeDb>) {
+    const first = createTransfer(dbi, {
+      fromAccountId: CHECKING,
+      toAccountId: SAVINGS,
+      date: "2025-03-01",
+      amount: 10000,
+      memo: "First",
+      cleared: false,
+      categoryId: null,
+    });
+    const second = createTransfer(dbi, {
+      fromAccountId: CHECKING,
+      toAccountId: SAVINGS,
+      date: "2025-03-01",
+      amount: 10000,
+      memo: "Second",
+      cleared: false,
+      categoryId: null,
+    });
+    return { first, second };
+  }
+
+  it("editing leg of #2 updates only #2's mirror, leaving #1 untouched", () => {
+    const dbi = makeDb();
+    const { first, second } = createAmbiguousPair(dbi);
+
+    updateTransaction(dbi, second.fromId, {
+      date: "2025-03-05",
+      payee: "Transfer",
+      categoryId: null,
+      memo: "Second, edited",
+      amount: -20000,
+      cleared: true,
+    });
+
+    const rows = allTransactions();
+    const firstFrom = rows.find((r) => r.id === first.fromId)!;
+    const firstTo = rows.find((r) => r.id === first.toId)!;
+    const secondFrom = rows.find((r) => r.id === second.fromId)!;
+    const secondTo = rows.find((r) => r.id === second.toId)!;
+
+    expect(secondFrom.amount).toBe(-20000);
+    expect(secondFrom.date).toBe("2025-03-05");
+    expect(secondFrom.memo).toBe("Second, edited");
+    expect(secondTo.amount).toBe(20000);
+    expect(secondTo.date).toBe("2025-03-05");
+    expect(secondTo.memo).toBe("Second, edited");
+
+    // #1's legs must be completely unaffected.
+    expect(firstFrom.amount).toBe(-10000);
+    expect(firstFrom.date).toBe("2025-03-01");
+    expect(firstFrom.memo).toBe("First");
+    expect(firstTo.amount).toBe(10000);
+    expect(firstTo.date).toBe("2025-03-01");
+    expect(firstTo.memo).toBe("First");
+  });
+
+  it("deleting #2's leg removes only #2's two rows, leaving #1 untouched", () => {
+    const dbi = makeDb();
+    const { first, second } = createAmbiguousPair(dbi);
+
+    deleteTransaction(dbi, second.fromId);
+
+    const rows = allTransactions();
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.id).sort()).toEqual([first.fromId, first.toId].sort());
+  });
+
+  it("toggling cleared on #2's leg flips only #2's legs, leaving #1's legs untouched", () => {
+    const dbi = makeDb();
+    const { first, second } = createAmbiguousPair(dbi);
+
+    toggleTransactionCleared(dbi, second.fromId);
+
+    const rows = allTransactions();
+    const firstFrom = rows.find((r) => r.id === first.fromId)!;
+    const firstTo = rows.find((r) => r.id === first.toId)!;
+    const secondFrom = rows.find((r) => r.id === second.fromId)!;
+    const secondTo = rows.find((r) => r.id === second.toId)!;
+
+    expect(secondFrom.cleared).toBe(1);
+    expect(secondTo.cleared).toBe(1);
+    expect(firstFrom.cleared).toBe(0);
+    expect(firstTo.cleared).toBe(0);
   });
 });

@@ -2,9 +2,9 @@
 
 ## Context
 
-An **open-source, self-hostable, private YNAB alternative** — built for anyone, with Yannick as first user. Core: envelope budgeting (assign every unit of currency), accounts with transactions, CSV import of bank statements, and tracking accounts for investments. Fresh build in this repo — the earlier `~/Code/ai/budget` attempt is discarded (unplanned quick hack), but its *findings* are reused: the YNAB math rules and export-format quirks are known-good knowledge.
+An **open-source, self-hostable, private YNAB alternative** — built for anyone who wants to run their own budgeting app instead of trusting a SaaS with their financial data. Core: envelope budgeting (assign every unit of currency), accounts with transactions, CSV import of bank statements, and tracking accounts for investments. Fresh build in this repo, informed by earlier findings on YNAB's math rules and export-format quirks (known-good knowledge, reused here rather than rediscovered).
 
-**Open source means**: nothing personal hardcoded, empty-state onboarding for new users, YNAB migration as a generic feature, personal data never committed (`plan/` and `data/` gitignored — Yannick's export is a local test fixture only), MIT license, README with setup + Docker instructions.
+**Open source means**: nothing personal hardcoded, empty-state onboarding for new users, YNAB migration as a generic feature, personal data never committed (`plan/` and `data/` gitignored — any maintainer's own export is a local test fixture only), MIT license, README with setup + Docker instructions.
 
 ## Decisions (made with user)
 
@@ -13,7 +13,7 @@ An **open-source, self-hostable, private YNAB alternative** — built for anyone
 - **No auth** — network-level protection assumed (localhost/Tailscale/reverse proxy).
 - **Light mode** UI, shadcn/ui, no AI-slop styling.
 - Single currency per budget, configurable (default CHF). Amounts stored as integer minor units (Rappen/cents).
-- **Open source (MIT)** — generic product; Yannick's export is a private local fixture, never in git.
+- **Open source (MIT)** — generic product; any personal YNAB export used for local testing is a private local fixture, never in git.
 
 ## Scope
 
@@ -71,7 +71,7 @@ Transfers = two linked rows (each row stores `transfer_account_id`; edits/delete
 - `Hidden Categories` group (66 legacy categories) → import hidden.
 - 147 legit full-duplicate rows exist → migration must NOT dedupe. Ongoing imports DO dedupe by hash (account, date, amount, payee) with user preview.
 - YNAB's export contains no goal/target data → monthly targets are re-entered manually after migration (a few minutes; only a handful of categories have them).
-- Verification step: after migration, recompute Available per category for recent months and diff against the *uploaded* Plan.csv values, plus recomputed account balances — shown as a report in the UI. Fully generic (works for any YNAB export, no hardcoded expectations); Yannick's export doubles as the local integration fixture.
+- Verification step: after migration, recompute Available per category for recent months and diff against the *uploaded* Plan.csv values, plus recomputed account balances — shown as a report in the UI. Fully generic (works for any YNAB export, no hardcoded expectations); a maintainer's own export doubles as the local integration fixture during development.
 
 ## Screens
 
@@ -85,7 +85,7 @@ Transfers = two linked rows (each row stores `transfer_account_id`; edits/delete
 ## Build order
 
 1. Scaffold: Next.js + Tailwind + shadcn + Drizzle/SQLite, git init (`.gitignore`: `data/`, `plan/`), MIT license, light theme tokens.
-2. Schema + migration importer + verification report. Milestone: my real data imported and numbers match YNAB.
+2. Schema + migration importer + verification report. Milestone: a real YNAB export imports and its numbers match YNAB.
 3. Budget screen with correct math + unit tests (Vitest) on budget-math. Includes monthly goals (target edit, underfunded indicator, fund-to-goal).
 4. Sidebar + account CRUD + register with search + transfers.
 5. Ongoing CSV import with duplicate preview.
@@ -101,5 +101,5 @@ Transfers = two linked rows (each row stores `transfer_account_id`; edits/delete
 ## Open questions
 
 1. Import full history since 2020, or cut over at e.g. Jan 2025? (Recommend: full — verification is stronger.)
-2. Credit card: keep YNAB-style payment bucket (matches your current habit) or simpler "pay-in-full" model (card is just an on-budget account, payment = plain transfer)? Plan assumes YNAB-style.
+2. Credit card: keep YNAB-style payment bucket (matches typical YNAB usage) or simpler "pay-in-full" model (card is just an on-budget account, payment = plain transfer)? Plan assumes YNAB-style.
 3. Yahoo Finance (unofficial, keyless) OK as price source, or prefer a keyed API?

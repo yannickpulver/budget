@@ -35,6 +35,7 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
   const [pending, startTransition] = useTransition();
   const [errors, setErrors] = useState<ImportRowErrorDto[] | null>(null);
   const [rows, setRows] = useState<RowState[] | null>(null);
+  const [batchId, setBatchId] = useState<string | null>(null);
   const [importedCount, setImportedCount] = useState<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -42,6 +43,7 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
   function reset() {
     setErrors(null);
     setRows(null);
+    setBatchId(null);
     setImportedCount(null);
     setFormError(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -56,6 +58,7 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
     setFormError(null);
     setErrors(null);
     setRows(null);
+    setBatchId(null);
     setImportedCount(null);
     const formData = new FormData();
     formData.append("file", file);
@@ -66,6 +69,7 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
         return;
       }
       setRows(outcome.rows.map((r) => ({ ...r, checked: !r.isDuplicate })));
+      setBatchId(outcome.batchId);
     });
   }
 
@@ -74,7 +78,7 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
   }
 
   function confirm() {
-    if (!rows) return;
+    if (!rows || !batchId) return;
     const checkedRows = rows.filter((r) => r.checked);
     startTransition(async () => {
       const outcome = await confirmImportAction(
@@ -86,7 +90,8 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
           amount: r.amount,
           categoryId: r.categoryId,
           importHash: r.importHash,
-        }))
+        })),
+        batchId
       );
       if (!outcome.ok) {
         setFormError(outcome.error);
