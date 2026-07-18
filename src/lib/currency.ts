@@ -31,3 +31,21 @@ export function parseMoneyInput(raw: string): number | null {
   if (!/^-?\d+(\.\d{1,2})?$/.test(cleaned)) return null;
   return Math.round(Number(cleaned) * 100);
 }
+
+/**
+ * Parse a holding quantity: a positive decimal, arbitrary precision (for
+ * fractional shares). Accepts a comma as the decimal separator. Returns null
+ * if unparseable or not strictly positive.
+ */
+export function parseQuantityInput(raw: string): number | null {
+  const trimmed = raw.trim().replace(",", ".");
+  if (trimmed === "") return null;
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return value > 0 ? value : null;
+}
+
+/** Format a quantity for display, trimming trailing zeros beyond 2 decimals. */
+export function formatQuantity(quantity: number): string {
+  return quantity.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 6 });
+}

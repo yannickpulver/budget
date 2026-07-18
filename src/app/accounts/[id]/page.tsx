@@ -6,6 +6,7 @@ import {
   getAccountDetail,
   getAccountRegister,
   getCategoryOptions,
+  getHoldingsView,
   getTransferTargets,
   listAccounts,
 } from "@/lib/queries";
@@ -13,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { AccountHeader } from "./account-header";
 import { AddTransactionRow } from "./add-transaction-row";
 import { REGISTER_GRID } from "./grid";
+import { HoldingsSection } from "./holdings-section";
 import { SearchBox } from "./search-box";
 import { TransactionRow } from "./transaction-row";
 
@@ -37,12 +39,15 @@ export default async function AccountPage({
   const groups = getCategoryOptions(db);
   const transferTargets = getTransferTargets(id, db);
   const accountsById = new Map(listAccounts(db).map((a) => [a.id, a]));
+  const holdingsView = detail.type === "tracking" ? getHoldingsView(id, db) : null;
 
   const totalPages = Math.max(1, Math.ceil(register.total / register.pageSize));
 
   return (
     <div className="flex flex-1 flex-col">
       <AccountHeader detail={detail} />
+
+      {holdingsView && <HoldingsSection accountId={id} view={holdingsView} />}
 
       <div className="flex items-center justify-between gap-4 px-4 py-3">
         <SearchBox />
