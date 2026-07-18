@@ -114,7 +114,7 @@ function runImport(result: ImportResult) {
       const transferAccountId =
         txn.transferAccountName != null ? accountIdByName.get(txn.transferAccountName) ?? null : null;
 
-      resolvedTransactions.push({ accountId, categoryId, amount: txn.amount, date: txn.date });
+      resolvedTransactions.push({ accountId, categoryId, amount: txn.amount, date: txn.date, transferAccountId });
 
       return {
         accountId,
