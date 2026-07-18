@@ -8,17 +8,20 @@
  * `invalidateBudgetCache()` to drop the cache.
  */
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import {
   computeGoalStatus,
   computeMonthSnapshot,
   monthKey,
   nextMonthKey,
   type AccountInfo,
+  type AccountType,
   type GoalStatus,
   type MonthSnapshot,
   type TxnInput,
 } from "./budget-math";
+import { formatMoney } from "./currency";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
 
@@ -327,4 +330,531 @@ export function getBudgetView(month: string): BudgetView {
     totalUnderfunded,
     groups,
   };
+}
+
+/**
+ * Accounts sidebar, account register and transaction/transfer mutations.
+ *
+ * These functions take an explicit `dbi` (falling back to the app-wide `db`)
+ * so the transfer logic can be exercised against an in-memory SQLite fixture
+ * in tests, the same way `loadBudgetData`/`SnapshotStore` are tested above.
+ */
+
+function getCurrency(dbi: DB): string {
+  const row = dbi
+    .select()
+    .from(schema.settings)
+    .all()
+    .find((s) => s.key === "currency");
+  return row?.value ?? DEFAULT_CURRENCY;
+}
+
+export interface AccountBalance {
+  id: number;
+  name: string;
+  type: AccountType;
+  closed: boolean;
+  balance: number;
+}
+
+/** Balance per account via one SQL aggregate (SUM amount), not a per-account walk. */
+export function listAccountBalances(dbi: DB = db): AccountBalance[] {
+  const balances = dbi
+    .select({
+      accountId: schema.transactions.accountId,
+      balance: sql<number>`coalesce(sum(${schema.transactions.amount}), 0)`,
+    })
+    .from(schema.transactions)
+    .groupBy(schema.transactions.accountId)
+    .all();
+  const balanceById = new Map(balances.map((b) => [b.accountId, b.balance]));
+
+  const accountRows = dbi
+    .select({
+      id: schema.accounts.id,
+      name: schema.accounts.name,
+      type: schema.accounts.type,
+      closed: schema.accounts.closed,
+      sort: schema.accounts.sort,
+    })
+    .from(schema.accounts)
+    .all();
+
+  return [...accountRows]
+    .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name))
+    .map((a) => ({
+      id: a.id,
+      name: a.name,
+      type: a.type,
+      closed: a.closed,
+      balance: balanceById.get(a.id) ?? 0,
+    }));
+}
+
+export interface SidebarData {
+  currency: string;
+  budget: AccountBalance[];
+  tracking: AccountBalance[];
+  closed: AccountBalance[];
+  budgetTotal: number;
+  trackingTotal: number;
+  netWorth: number;
+}
+
+function sumBalances(accounts: AccountBalance[]): number {
+  return accounts.reduce((total, a) => total + a.balance, 0);
+}
+
+/** Everything the sidebar renders: grouped accounts, subtotals, net worth. */
+export function getSidebarData(dbi: DB = db): SidebarData {
+  const all = listAccountBalances(dbi);
+  const open = all.filter((a) => !a.closed);
+  const closed = all.filter((a) => a.closed);
+  const budget = open.filter((a) => a.type !== "tracking");
+  const tracking = open.filter((a) => a.type === "tracking");
+  const budgetTotal = sumBalances(budget);
+  const trackingTotal = sumBalances(tracking);
+
+  return {
+    currency: getCurrency(dbi),
+    budget,
+    tracking,
+    closed,
+    budgetTotal,
+    trackingTotal,
+    netWorth: budgetTotal + trackingTotal,
+  };
+}
+
+export interface AccountDetail {
+  id: number;
+  name: string;
+  type: AccountType;
+  closed: boolean;
+  currency: string;
+  balance: number;
+  clearedBalance: number;
+  unclearedBalance: number;
+  transactionCount: number;
+}
+
+/** Header data for the account page: balance, cleared/uncleared split, txn count. */
+export function getAccountDetail(id: number, dbi: DB = db): AccountDetail | null {
+  const account = dbi
+    .select()
+    .from(schema.accounts)
+    .where(eq(schema.accounts.id, id))
+    .get();
+  if (!account) return null;
+
+  const agg = dbi
+    .select({
+      balance: sql<number>`coalesce(sum(${schema.transactions.amount}), 0)`,
+      clearedBalance: sql<number>`coalesce(sum(case when ${schema.transactions.cleared} then ${schema.transactions.amount} else 0 end), 0)`,
+      count: sql<number>`count(*)`,
+    })
+    .from(schema.transactions)
+    .where(eq(schema.transactions.accountId, id))
+    .get();
+
+  const balance = agg?.balance ?? 0;
+  const clearedBalance = agg?.clearedBalance ?? 0;
+
+  return {
+    id: account.id,
+    name: account.name,
+    type: account.type,
+    closed: account.closed,
+    currency: getCurrency(dbi),
+    balance,
+    clearedBalance,
+    unclearedBalance: balance - clearedBalance,
+    transactionCount: agg?.count ?? 0,
+  };
+}
+
+export interface RegisterRow {
+  id: number;
+  date: string;
+  payee: string;
+  categoryId: number | null;
+  categoryName: string | null;
+  memo: string;
+  amount: number;
+  cleared: boolean;
+  transferAccountId: number | null;
+  transferAccountName: string | null;
+}
+
+export interface RegisterPage {
+  rows: RegisterRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+const REGISTER_PAGE_SIZE = 100;
+
+function registerRowMatches(row: RegisterRow, search: string): boolean {
+  if (row.payee.toLowerCase().includes(search)) return true;
+  if (row.memo.toLowerCase().includes(search)) return true;
+  if (row.categoryName?.toLowerCase().includes(search)) return true;
+  if (row.transferAccountName?.toLowerCase().includes(search)) return true;
+  const amountText = formatMoney(row.amount).toLowerCase();
+  return amountText.includes(search) || amountText.replace(/'/g, "").includes(search);
+}
+
+/**
+ * Paginated, searchable transaction register for one account (newest first).
+ * Filtering runs server-side against the account's full row set (at most a
+ * few thousand rows for a personal budget — cheap to hold in memory) rather
+ * than shipping rows to the client to filter.
+ */
+export function getAccountRegister(
+  accountId: number,
+  opts: { search?: string; page?: number } = {},
+  dbi: DB = db
+): RegisterPage {
+  const page = Math.max(1, opts.page ?? 1);
+  const search = opts.search?.trim().toLowerCase() ?? "";
+
+  const transferAccount = alias(schema.accounts, "transfer_account");
+  const rows: RegisterRow[] = dbi
+    .select({
+      id: schema.transactions.id,
+      date: schema.transactions.date,
+      payee: schema.transactions.payee,
+      categoryId: schema.transactions.categoryId,
+      categoryName: schema.categories.name,
+      memo: schema.transactions.memo,
+      amount: schema.transactions.amount,
+      cleared: schema.transactions.cleared,
+      transferAccountId: schema.transactions.transferAccountId,
+      transferAccountName: transferAccount.name,
+    })
+    .from(schema.transactions)
+    .leftJoin(schema.categories, eq(schema.transactions.categoryId, schema.categories.id))
+    .leftJoin(transferAccount, eq(schema.transactions.transferAccountId, transferAccount.id))
+    .where(eq(schema.transactions.accountId, accountId))
+    .orderBy(desc(schema.transactions.date), desc(schema.transactions.id))
+    .all()
+    .map((r) => ({
+      ...r,
+      categoryName: r.categoryName ?? null,
+      transferAccountName: r.transferAccountName ?? null,
+    }));
+
+  const filtered = search === "" ? rows : rows.filter((r) => registerRowMatches(r, search));
+  const start = (page - 1) * REGISTER_PAGE_SIZE;
+
+  return {
+    rows: filtered.slice(start, start + REGISTER_PAGE_SIZE),
+    total: filtered.length,
+    page,
+    pageSize: REGISTER_PAGE_SIZE,
+  };
+}
+
+export interface CategoryOption {
+  id: number;
+  name: string;
+}
+
+export interface CategoryGroupOption {
+  id: number;
+  name: string;
+  categories: CategoryOption[];
+}
+
+/** Visible groups/categories for the transaction category dropdown. */
+export function getCategoryOptions(dbi: DB = db): CategoryGroupOption[] {
+  const groups = dbi
+    .select({ id: schema.categoryGroups.id, name: schema.categoryGroups.name, sort: schema.categoryGroups.sort })
+    .from(schema.categoryGroups)
+    .where(eq(schema.categoryGroups.hidden, false))
+    .all();
+  const categoryRows = dbi
+    .select({
+      id: schema.categories.id,
+      name: schema.categories.name,
+      groupId: schema.categories.groupId,
+      sort: schema.categories.sort,
+    })
+    .from(schema.categories)
+    .where(eq(schema.categories.hidden, false))
+    .all();
+
+  const byGroup = new Map<number, CategoryOption[]>();
+  for (const c of [...categoryRows].sort((a, b) => a.sort - b.sort)) {
+    const list = byGroup.get(c.groupId) ?? [];
+    list.push({ id: c.id, name: c.name });
+    byGroup.set(c.groupId, list);
+  }
+
+  return [...groups]
+    .sort((a, b) => a.sort - b.sort)
+    .map((g) => ({ id: g.id, name: g.name, categories: byGroup.get(g.id) ?? [] }))
+    .filter((g) => g.categories.length > 0);
+}
+
+export interface AccountRef {
+  id: number;
+  name: string;
+  type: AccountType;
+  closed: boolean;
+}
+
+/** Lean account list (no balances) for name/type lookups — e.g. resolving a transfer leg's other account. */
+export function listAccounts(dbi: DB = db): AccountRef[] {
+  return dbi
+    .select({
+      id: schema.accounts.id,
+      name: schema.accounts.name,
+      type: schema.accounts.type,
+      closed: schema.accounts.closed,
+      sort: schema.accounts.sort,
+    })
+    .from(schema.accounts)
+    .all()
+    .sort((a, b) => a.sort - b.sort)
+    .map(({ id, name, type, closed }) => ({ id, name, type, closed }));
+}
+
+export type TransferTarget = Omit<AccountRef, "closed">;
+
+/** Open accounts eligible as a transfer target (everything but the current account). */
+export function getTransferTargets(excludeAccountId: number, dbi: DB = db): TransferTarget[] {
+  return listAccounts(dbi)
+    .filter((a) => !a.closed && a.id !== excludeAccountId)
+    .map(({ id, name, type }) => ({ id, name, type }));
+}
+
+export interface CreateAccountInput {
+  name: string;
+  type: AccountType;
+  /** Minor units. 0 = no starting-balance transaction created. */
+  startingBalance: number;
+  /** ISO date for the starting-balance transaction. */
+  date: string;
+}
+
+/**
+ * Create an account and, if non-zero, a "Starting Balance" transaction.
+ * Uncategorized (categoryId null) for every account type — for on-budget
+ * accounts that lands in Ready to Assign; tracking accounts aren't budgeted
+ * so it's simply uncategorized.
+ */
+export function createAccount(dbi: DB, input: CreateAccountInput): number {
+  const maxSort = dbi
+    .select({ maxSort: sql<number | null>`max(${schema.accounts.sort})` })
+    .from(schema.accounts)
+    .get();
+  const sort = (maxSort?.maxSort ?? -1) + 1;
+
+  const result = dbi
+    .insert(schema.accounts)
+    .values({ name: input.name, type: input.type, sort })
+    .run();
+  const accountId = Number(result.lastInsertRowid);
+
+  if (input.startingBalance !== 0) {
+    dbi
+      .insert(schema.transactions)
+      .values({
+        accountId,
+        date: input.date,
+        payee: "Starting Balance",
+        categoryId: null,
+        memo: "",
+        amount: input.startingBalance,
+        cleared: true,
+      })
+      .run();
+  }
+
+  return accountId;
+}
+
+export function renameAccount(dbi: DB, id: number, name: string): void {
+  dbi.update(schema.accounts).set({ name }).where(eq(schema.accounts.id, id)).run();
+}
+
+export function setAccountClosed(dbi: DB, id: number, closed: boolean): void {
+  dbi.update(schema.accounts).set({ closed }).where(eq(schema.accounts.id, id)).run();
+}
+
+export function deleteAccount(dbi: DB, id: number): void {
+  dbi.delete(schema.accounts).where(eq(schema.accounts.id, id)).run();
+}
+
+export interface TransactionInput {
+  accountId: number;
+  date: string;
+  payee: string;
+  categoryId: number | null;
+  memo: string;
+  amount: number;
+  cleared: boolean;
+}
+
+/** Create a plain (non-transfer) transaction. */
+export function createTransaction(dbi: DB, input: TransactionInput): number {
+  const result = dbi.insert(schema.transactions).values(input).run();
+  return Number(result.lastInsertRowid);
+}
+
+type TransferRow = typeof schema.transactions.$inferSelect;
+
+/** Find the mirror leg of a transfer by (account, other account, date, amount) — the schema has no pair id, per PLAN.md. */
+function findMirrorLeg(dbi: DB, leg: TransferRow): TransferRow | null {
+  if (leg.transferAccountId == null) return null;
+  return (
+    dbi
+      .select()
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.accountId, leg.transferAccountId),
+          eq(schema.transactions.transferAccountId, leg.accountId),
+          eq(schema.transactions.date, leg.date),
+          eq(schema.transactions.amount, -leg.amount)
+        )
+      )
+      .get() ?? null
+  );
+}
+
+export interface TransactionEditInput {
+  date: string;
+  payee: string;
+  categoryId: number | null;
+  memo: string;
+  amount: number;
+  cleared: boolean;
+}
+
+/**
+ * Update a transaction. If it's a transfer leg, date/memo/amount/cleared are
+ * synced to the mirror leg (amount negated); payee and category stay
+ * per-leg (only one side of a transfer ever carries a category — see
+ * `createTransfer`).
+ */
+export function updateTransaction(dbi: DB, id: number, input: TransactionEditInput): void {
+  const original = dbi.select().from(schema.transactions).where(eq(schema.transactions.id, id)).get();
+  if (!original) return;
+  const isTransfer = original.transferAccountId != null;
+
+  dbi
+    .update(schema.transactions)
+    .set({
+      date: input.date,
+      payee: isTransfer ? original.payee : input.payee,
+      categoryId: input.categoryId,
+      memo: input.memo,
+      amount: input.amount,
+      cleared: input.cleared,
+    })
+    .where(eq(schema.transactions.id, id))
+    .run();
+
+  if (isTransfer) {
+    const mirror = findMirrorLeg(dbi, original);
+    if (mirror) {
+      dbi
+        .update(schema.transactions)
+        .set({ date: input.date, memo: input.memo, amount: -input.amount, cleared: input.cleared })
+        .where(eq(schema.transactions.id, mirror.id))
+        .run();
+    }
+  }
+}
+
+/** Delete a transaction. If it's a transfer leg, its mirror leg is deleted too. */
+export function deleteTransaction(dbi: DB, id: number): void {
+  const original = dbi.select().from(schema.transactions).where(eq(schema.transactions.id, id)).get();
+  if (!original) return;
+
+  if (original.transferAccountId != null) {
+    const mirror = findMirrorLeg(dbi, original);
+    if (mirror) dbi.delete(schema.transactions).where(eq(schema.transactions.id, mirror.id)).run();
+  }
+  dbi.delete(schema.transactions).where(eq(schema.transactions.id, id)).run();
+}
+
+/** Flip a transaction's cleared flag. Syncs the mirror leg for transfers. */
+export function toggleTransactionCleared(dbi: DB, id: number): void {
+  const original = dbi.select().from(schema.transactions).where(eq(schema.transactions.id, id)).get();
+  if (!original) return;
+  const cleared = !original.cleared;
+
+  dbi.update(schema.transactions).set({ cleared }).where(eq(schema.transactions.id, id)).run();
+
+  if (original.transferAccountId != null) {
+    const mirror = findMirrorLeg(dbi, original);
+    if (mirror) dbi.update(schema.transactions).set({ cleared }).where(eq(schema.transactions.id, mirror.id)).run();
+  }
+}
+
+export interface CreateTransferInput {
+  fromAccountId: number;
+  toAccountId: number;
+  date: string;
+  /** Magnitude, minor units — sign is derived per leg. */
+  amount: number;
+  memo: string;
+  cleared: boolean;
+  /**
+   * Only meaningful (and required by the UI) when exactly one side is a
+   * tracking account: YNAB categorizes the on-budget leg of a transfer to/from
+   * tracking money, since that money is leaving/entering the budget. Both-
+   * on-budget transfers carry no category on either leg.
+   */
+  categoryId: number | null;
+}
+
+/** Create both legs of a transfer atomically, linked via `transferAccountId`. */
+export function createTransfer(dbi: DB, input: CreateTransferInput): { fromId: number; toId: number } {
+  const accountRows = dbi
+    .select({ id: schema.accounts.id, type: schema.accounts.type })
+    .from(schema.accounts)
+    .all();
+  const typeById = new Map(accountRows.map((a) => [a.id, a.type]));
+  const fromIsTracking = typeById.get(input.fromAccountId) === "tracking";
+  const toIsTracking = typeById.get(input.toAccountId) === "tracking";
+
+  // Category only applies to the on-budget leg when the other leg is tracking.
+  const fromCategoryId = !fromIsTracking && toIsTracking ? input.categoryId : null;
+  const toCategoryId = !toIsTracking && fromIsTracking ? input.categoryId : null;
+
+  const amount = Math.abs(input.amount);
+
+  const fromResult = dbi
+    .insert(schema.transactions)
+    .values({
+      accountId: input.fromAccountId,
+      date: input.date,
+      payee: "Transfer",
+      categoryId: fromCategoryId,
+      memo: input.memo,
+      amount: -amount,
+      cleared: input.cleared,
+      transferAccountId: input.toAccountId,
+    })
+    .run();
+
+  const toResult = dbi
+    .insert(schema.transactions)
+    .values({
+      accountId: input.toAccountId,
+      date: input.date,
+      payee: "Transfer",
+      categoryId: toCategoryId,
+      memo: input.memo,
+      amount,
+      cleared: input.cleared,
+      transferAccountId: input.fromAccountId,
+    })
+    .run();
+
+  return { fromId: Number(fromResult.lastInsertRowid), toId: Number(toResult.lastInsertRowid) };
 }
