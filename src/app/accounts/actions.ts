@@ -18,21 +18,14 @@ import {
   invalidateBudgetCache,
   type TransactionEditInput,
 } from "@/lib/queries";
+// `refresh` lives here (not this file) because every export of a "use
+// server" module must itself be an async server action.
+import { refresh } from "./refresh";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-/** Every write here can shift budget cache + account balances, so refresh both broadly. */
-function refresh(...accountIds: Array<number | null | undefined>): void {
-  invalidateBudgetCache();
-  revalidatePath("/", "layout"); // sidebar lives in the root layout
-  revalidatePath("/budget/[month]", "page");
-  for (const id of accountIds) {
-    if (id != null) revalidatePath(`/accounts/${id}`, "page");
-  }
 }
 
 export interface CreateAccountFormInput {

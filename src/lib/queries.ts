@@ -21,6 +21,7 @@ import {
   type MonthSnapshot,
   type TxnInput,
 } from "./budget-math";
+import { computeImportHash, resolveCategoryName, type ParsedImportRow } from "./csv-import";
 import { formatMoney } from "./currency";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
@@ -890,4 +891,115 @@ export function createTransfer(dbi: DB, input: CreateTransferInput): { fromId: n
     .run();
 
   return { fromId: Number(fromResult.lastInsertRowid), toId: Number(toResult.lastInsertRowid) };
+}
+
+/**
+ * Ongoing per-account CSV import: preview + commit.
+ *
+ * Preview matches each row's category name against existing (visible)
+ * categories and flags duplicates; commit inserts the rows the user kept
+ * checked. See `src/lib/csv-import.ts` for the pure CSV parsing/hashing.
+ */
+
+export interface ImportPreviewRow {
+  line: number;
+  date: string;
+  payee: string;
+  memo: string;
+  amount: number;
+  categoryId: number | null;
+  /** Display name — matched category, "Ready to Assign", raw unmatched name, or null. */
+  categoryName: string | null;
+  isDuplicate: boolean;
+  importHash: string;
+}
+
+/**
+ * Build the import preview: match categories by name (case-insensitive,
+ * first match wins), flag duplicates against existing transactions in this
+ * account (by import_hash or by date+amount+payee) and against earlier rows
+ * in the same file.
+ */
+export function buildImportPreview(dbi: DB, accountId: number, rows: ParsedImportRow[]): ImportPreviewRow[] {
+  const categoryIdByName = new Map<string, number>();
+  const categoryNameById = new Map<number, string>();
+  for (const c of dbi
+    .select({ id: schema.categories.id, name: schema.categories.name })
+    .from(schema.categories)
+    .where(eq(schema.categories.hidden, false))
+    .all()) {
+    if (!categoryIdByName.has(c.name.toLowerCase())) categoryIdByName.set(c.name.toLowerCase(), c.id);
+    categoryNameById.set(c.id, c.name);
+  }
+
+  const existing = dbi
+    .select({
+      date: schema.transactions.date,
+      amount: schema.transactions.amount,
+      payee: schema.transactions.payee,
+      importHash: schema.transactions.importHash,
+    })
+    .from(schema.transactions)
+    .where(eq(schema.transactions.accountId, accountId))
+    .all();
+  const existingHashes = new Set(existing.map((t) => t.importHash).filter((h): h is string => h != null));
+  const existingTriples = new Set(existing.map((t) => `${t.date}|${t.amount}|${t.payee}`));
+  const seenInBatch = new Set<string>();
+
+  return rows.map((row): ImportPreviewRow => {
+    const resolved = resolveCategoryName(row.categoryName);
+    const categoryId = resolved.isReadyToAssign
+      ? null
+      : resolved.name != null
+        ? (categoryIdByName.get(resolved.name.toLowerCase()) ?? null)
+        : null;
+    const importHash = computeImportHash(accountId, row.date, row.amount, row.payee);
+    const triple = `${row.date}|${row.amount}|${row.payee}`;
+    const isDuplicate = existingHashes.has(importHash) || existingTriples.has(triple) || seenInBatch.has(triple);
+    seenInBatch.add(triple);
+
+    const categoryName = categoryId != null ? categoryNameById.get(categoryId)! : resolved.name;
+
+    return {
+      line: row.line,
+      date: row.date,
+      payee: row.payee,
+      memo: row.memo,
+      amount: row.amount,
+      categoryId,
+      categoryName,
+      isDuplicate,
+      importHash,
+    };
+  });
+}
+
+export interface ImportInsertRow {
+  date: string;
+  payee: string;
+  memo: string;
+  amount: number;
+  categoryId: number | null;
+  importHash: string;
+}
+
+/** Insert the checked import rows (uncategorized unless matched), stamping import_hash. */
+export function commitImport(dbi: DB, accountId: number, rows: ImportInsertRow[]): number {
+  if (rows.length === 0) return 0;
+  dbi
+    .insert(schema.transactions)
+    .values(
+      rows.map((r) => ({
+        accountId,
+        date: r.date,
+        payee: r.payee,
+        categoryId: r.categoryId,
+        memo: r.memo,
+        amount: r.amount,
+        cleared: true,
+        importHash: r.importHash,
+      }))
+    )
+    .run();
+  return rows.length;
 }
