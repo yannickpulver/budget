@@ -1,17 +1,38 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Tags, Wallet } from "lucide-react";
+import { db } from "@/db";
 import { prevMonthKey, nextMonthKey } from "@/lib/budget-math";
 import { formatCurrency, formatMoney } from "@/lib/currency";
 import {
   currentMonth,
   getBudgetView,
+  listAccounts,
   type CategoryView,
   type GroupView,
 } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { AssignCell } from "./assign-cell";
 import { GoalControl } from "./goal-control";
+
+const MONTH_RE = /^(\d{4})-(\d{2})$/;
+
+function isValidMonth(month: string): boolean {
+  const match = MONTH_RE.exec(month);
+  if (!match) return false;
+  const mon = Number(match[2]);
+  return mon >= 1 && mon <= 12;
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ month: string }>;
+}): Promise<Metadata> {
+  const { month } = await params;
+  return { title: isValidMonth(month) ? `${monthLabel(month)} · newbudget` : "newbudget" };
+}
 
 const GRID = "grid grid-cols-[minmax(12rem,1fr)_7.5rem_7.5rem_8.5rem] items-center gap-x-2";
 
@@ -37,7 +58,7 @@ export default async function BudgetPage({
   params: Promise<{ month: string }>;
 }) {
   const { month } = await params;
-  if (!/^\d{4}-\d{2}$/.test(month)) notFound();
+  if (!isValidMonth(month)) notFound();
 
   const view = getBudgetView(month);
   const first = view.months[0];
@@ -45,6 +66,7 @@ export default async function BudgetPage({
   const hasPrev = month > first;
   const hasNext = month < last;
   const today = currentMonth();
+  const hasAccounts = listAccounts(db).length > 0;
 
   return (
     <div className="flex flex-1 flex-col">
@@ -59,24 +81,54 @@ export default async function BudgetPage({
       />
 
       <div className="px-4 py-3">
-        <div className={cn(GRID, "px-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase")}>
-          <div>Category</div>
-          <div className="text-right">Assigned</div>
-          <div className="text-right">Activity</div>
-          <div className="text-right">Available</div>
-        </div>
-
-        <div className="divide-y divide-border rounded-lg border border-border">
-          {view.groups.map((group) => (
-            <Group key={group.id} group={group} month={month} />
-          ))}
-          {view.groups.length === 0 && (
-            <div className="p-6 text-center text-sm text-muted-foreground">
-              No categories yet.
+        {view.groups.length === 0 ? (
+          <EmptyState hasAccounts={hasAccounts} />
+        ) : (
+          <>
+            <div className={cn(GRID, "px-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase")}>
+              <div>Category</div>
+              <div className="text-right">Assigned</div>
+              <div className="text-right">Activity</div>
+              <div className="text-right">Available</div>
             </div>
-          )}
-        </div>
+
+            <div className="divide-y divide-border rounded-lg border border-border">
+              {view.groups.map((group) => (
+                <Group key={group.id} group={group} month={month} />
+              ))}
+            </div>
+          </>
+        )}
       </div>
+    </div>
+  );
+}
+
+function EmptyState({ hasAccounts }: { hasAccounts: boolean }) {
+  return (
+    <div className="mx-auto max-w-md rounded-lg border border-dashed border-border p-8 text-center">
+      <Wallet className="mx-auto size-6 text-muted-foreground" />
+      <h2 className="mt-3 text-sm font-semibold">
+        {hasAccounts ? "No categories to budget yet" : "Welcome to newbudget"}
+      </h2>
+      <p className="mt-1.5 text-sm text-muted-foreground">
+        {hasAccounts
+          ? "All your categories are hidden, or none exist yet. Add or unhide some in Categories."
+          : "Add your first account in the sidebar to get started. A small starter set of budget categories is created automatically — rename, hide, or delete anything you don't need."}
+      </p>
+      <div className="mt-4 flex flex-col items-center gap-2">
+        <Link
+          href="/settings/categories"
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+        >
+          <Tags className="size-3.5" />
+          Manage categories
+        </Link>
+      </div>
+      <p className="mt-5 border-t border-border pt-3 text-xs text-muted-foreground">
+        Migrating from YNAB? Run <code className="rounded bg-muted px-1 py-0.5">pnpm migrate:ynab</code> from
+        the command line — see the README for setup instructions.
+      </p>
     </div>
   );
 }

@@ -1,0 +1,12 @@
+services:
+  newbudget:
+    build: .
+    # Or, once published: image: ghcr.io/<you>/newbudget:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persists the SQLite database (and its -wal/-shm files) on the host.
+      - ./data:/data
+    environment:
+      - DATABASE_PATH=/data/budget.db
+    restart: unless-stopped
