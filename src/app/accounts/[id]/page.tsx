@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -17,6 +18,16 @@ import { REGISTER_GRID } from "./grid";
 import { HoldingsSection } from "./holdings-section";
 import { SearchBox } from "./search-box";
 import { TransactionRow } from "./transaction-row";
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id: idParam } = await params;
+  const detail = Number.isInteger(Number(idParam)) ? getAccountDetail(Number(idParam), db) : null;
+  return { title: detail ? `${detail.name} · newbudget` : "newbudget" };
+}
 
 export default async function AccountPage({
   params,

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronRight, Wallet } from "lucide-react";
+import { ChevronRight, PiggyBank, Tags, Wallet } from "lucide-react";
 import { useState } from "react";
 import { AddAccountDialog } from "@/app/accounts/add-account-dialog";
 import { formatMoney } from "@/lib/currency";
@@ -21,6 +21,8 @@ function balanceClass(value: number): string {
 export function Sidebar({ data }: { data: SidebarData }) {
   const pathname = usePathname();
   const [closedOpen, setClosedOpen] = useState(false);
+  const hasAnyAccounts =
+    data.budget.length > 0 || data.tracking.length > 0 || data.closed.length > 0;
 
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-sidebar">
@@ -31,6 +33,20 @@ export function Sidebar({ data }: { data: SidebarData }) {
           <Wallet className="size-4" />
           Budget
         </SidebarLink>
+        <SidebarLink href="/settings/categories" active={pathname.startsWith("/settings/categories")}>
+          <Tags className="size-4" />
+          Categories
+        </SidebarLink>
+
+        {!hasAnyAccounts && (
+          <div className="mx-1 mt-4 rounded-md border border-dashed border-border p-3 text-center">
+            <PiggyBank className="mx-auto size-5 text-muted-foreground" />
+            <p className="mt-1.5 text-xs font-medium">No accounts yet</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Add your first account to start budgeting.
+            </p>
+          </div>
+        )}
 
         <AccountGroup
           title="Budget"
