@@ -1,0 +1,277 @@
+import { describe, expect, it } from "vitest";
+import {
+  computeAvailable,
+  computeCategoryActivity,
+  computeGoalStatus,
+  computeMonthSnapshot,
+  nextMonthKey,
+  type AccountInfo,
+  type MonthSnapshot,
+  type TxnInput,
+} from "./budget-math";
+
+const CHECKING = 1;
+const CREDIT = 2;
+const TRACKING = 3;
+const SAVINGS = 4;
+
+const GROCERIES = 100;
+const RENT = 101;
+const PAYMENT_CAT = 102;
+
+function accountsMap(overrides: Record<number, AccountInfo> = {}): Map<number, AccountInfo> {
+  const base: Record<number, AccountInfo> = {
+    [CHECKING]: { id: CHECKING, type: "checking", paymentCategoryId: null },
+    [CREDIT]: { id: CREDIT, type: "credit", paymentCategoryId: PAYMENT_CAT },
+    [TRACKING]: { id: TRACKING, type: "tracking", paymentCategoryId: null },
+    [SAVINGS]: { id: SAVINGS, type: "savings", paymentCategoryId: null },
+    ...overrides,
+  };
+  return new Map(Object.entries(base).map(([id, info]) => [Number(id), info]));
+}
+
+interface MonthInput {
+  assignedByCategory: Map<number, number>;
+  transactions: TxnInput[];
+}
+
+function walkMonths(
+  months: MonthInput[],
+  categoryIds: number[],
+  accounts: Map<number, AccountInfo>
+): MonthSnapshot[] {
+  const snapshots: MonthSnapshot[] = [];
+  let prevAvailable = new Map<number, number>();
+  let cumulativeFunds = 0;
+
+  for (const month of months) {
+    const snapshot = computeMonthSnapshot({
+      categoryIds,
+      prevAvailable,
+      assignedByCategory: month.assignedByCategory,
+      monthTransactions: month.transactions,
+      cumulativeOnBudgetFundsThroughPrevMonth: cumulativeFunds,
+      accounts,
+    });
+    snapshots.push(snapshot);
+    prevAvailable = new Map(
+      Array.from(snapshot.categories.entries()).map(([id, s]) => [id, s.available])
+    );
+    cumulativeFunds = snapshot.cumulativeOnBudgetFunds;
+  }
+
+  return snapshots;
+}
+
+describe("computeAvailable", () => {
+  it("rolls a positive available balance forward", () => {
+    // available(M) = max(0, prev) + assigned + activity
+    expect(computeAvailable(50, 0, 0)).toBe(50);
+  });
+
+  it("does not let a negative available balance carry forward", () => {
+    expect(computeAvailable(-30, 0, 0)).toBe(0);
+  });
+});
+
+describe("rollover across months", () => {
+  it("carries unspent available into the next month", () => {
+    const accounts = accountsMap();
+    const months: MonthInput[] = [
+      {
+        assignedByCategory: new Map([[GROCERIES, 10000]]),
+        transactions: [{ accountId: CHECKING, categoryId: GROCERIES, amount: -4000 }],
+      },
+      {
+        assignedByCategory: new Map(),
+        transactions: [],
+      },
+    ];
+    const [month1, month2] = walkMonths(months, [GROCERIES], accounts);
+    expect(month1.categories.get(GROCERIES)?.available).toBe(6000);
+    // Nothing assigned or spent in month 2 — the 6000 rolls forward unchanged.
+    expect(month2.categories.get(GROCERIES)?.available).toBe(6000);
+  });
+});
+
+describe("overspend reset", () => {
+  it("does not carry a negative available forward; it comes out of next month's RTA instead", () => {
+    const accounts = accountsMap();
+    const months: MonthInput[] = [
+      {
+        // Nothing assigned to Groceries, but 30 spent -> available = -30.
+        assignedByCategory: new Map(),
+        transactions: [{ accountId: CHECKING, categoryId: GROCERIES, amount: -3000 }],
+      },
+      {
+        assignedByCategory: new Map(),
+        transactions: [],
+      },
+    ];
+    const [month1, month2] = walkMonths(months, [GROCERIES], accounts);
+    expect(month1.categories.get(GROCERIES)?.available).toBe(-3000);
+    expect(month1.readyToAssign).toBe(0);
+    // Overspend does not roll forward as a debt on the category...
+    expect(month2.categories.get(GROCERIES)?.available).toBe(0);
+    // ...instead it comes out of month2's readyToAssign, since the clamp to 0
+    // only happens when the negative available is carried into the next month.
+    expect(month2.readyToAssign).toBe(-3000);
+  });
+});
+
+describe("readyToAssign identity", () => {
+  it("always equals on-budget funds through M minus the sum of all category availables", () => {
+    const accounts = accountsMap();
+    const months: MonthInput[] = [
+      {
+        assignedByCategory: new Map([
+          [GROCERIES, 20000],
+          [RENT, 150000],
+        ]),
+        transactions: [
+          { accountId: CHECKING, categoryId: null, amount: 500000 }, // income via RTA
+          { accountId: CHECKING, categoryId: GROCERIES, amount: -8000 },
+          { accountId: CHECKING, categoryId: RENT, amount: -150000 },
+        ],
+      },
+      {
+        assignedByCategory: new Map([[GROCERIES, 20000]]),
+        transactions: [{ accountId: CHECKING, categoryId: GROCERIES, amount: -25000 }],
+      },
+    ];
+    const snapshots = walkMonths(months, [GROCERIES, RENT], accounts);
+    for (const snapshot of snapshots) {
+      const totalAvailable = Array.from(snapshot.categories.values()).reduce(
+        (sum, c) => sum + c.available,
+        0
+      );
+      expect(snapshot.readyToAssign).toBe(snapshot.cumulativeOnBudgetFunds - totalAvailable);
+    }
+  });
+});
+
+describe("income via Ready to Assign category", () => {
+  it("increases readyToAssign without touching any category's activity", () => {
+    const accounts = accountsMap();
+    const activity = computeCategoryActivity(
+      [{ accountId: CHECKING, categoryId: null, amount: 100000 }],
+      accounts
+    );
+    expect(activity.size).toBe(0);
+
+    const [month] = walkMonths(
+      [
+        {
+          assignedByCategory: new Map(),
+          transactions: [{ accountId: CHECKING, categoryId: null, amount: 100000 }],
+        },
+      ],
+      [GROCERIES],
+      accounts
+    );
+    expect(month.readyToAssign).toBe(100000);
+  });
+});
+
+describe("transfers excluded from activity", () => {
+  it("a transfer leg (no category) never contributes to category activity", () => {
+    const accounts = accountsMap();
+    const activity = computeCategoryActivity(
+      [
+        { accountId: CHECKING, categoryId: null, amount: -20000 },
+        { accountId: SAVINGS, categoryId: null, amount: 20000 },
+      ],
+      accounts
+    );
+    expect(activity.size).toBe(0);
+  });
+
+  it("a transfer between two on-budget accounts nets to zero on readyToAssign", () => {
+    const accounts = accountsMap();
+    const [month] = walkMonths(
+      [
+        {
+          assignedByCategory: new Map(),
+          transactions: [
+            { accountId: CHECKING, categoryId: null, amount: -20000 },
+            { accountId: SAVINGS, categoryId: null, amount: 20000 },
+          ],
+        },
+      ],
+      [GROCERIES],
+      accounts
+    );
+    expect(month.readyToAssign).toBe(0);
+  });
+
+  it("a transfer to a tracking account removes funds from readyToAssign", () => {
+    const accounts = accountsMap();
+    const [month] = walkMonths(
+      [
+        {
+          assignedByCategory: new Map(),
+          transactions: [
+            { accountId: CHECKING, categoryId: null, amount: -20000 },
+            { accountId: TRACKING, categoryId: null, amount: 20000 },
+          ],
+        },
+      ],
+      [GROCERIES],
+      accounts
+    );
+    expect(month.readyToAssign).toBe(-20000);
+  });
+});
+
+describe("credit-card payment-category feed", () => {
+  it("categorized spend on a credit account also credits its linked payment category", () => {
+    const accounts = accountsMap();
+    const activity = computeCategoryActivity(
+      [{ accountId: CREDIT, categoryId: GROCERIES, amount: -5000 }],
+      accounts
+    );
+    expect(activity.get(GROCERIES)).toBe(-5000);
+    expect(activity.get(PAYMENT_CAT)).toBe(5000);
+  });
+
+  it("keeps the RTA identity intact across a credit-card purchase", () => {
+    const accounts = accountsMap();
+    const [month] = walkMonths(
+      [
+        {
+          assignedByCategory: new Map([[GROCERIES, 10000]]),
+          transactions: [{ accountId: CREDIT, categoryId: GROCERIES, amount: -5000 }],
+        },
+      ],
+      [GROCERIES, PAYMENT_CAT],
+      accounts
+    );
+    expect(month.categories.get(GROCERIES)?.available).toBe(5000);
+    expect(month.categories.get(PAYMENT_CAT)?.available).toBe(5000);
+  });
+});
+
+describe("monthly goal underfunded calc", () => {
+  it("is null when the category has no target", () => {
+    expect(computeGoalStatus(null, 5000)).toBeNull();
+  });
+
+  it("reports the remaining amount when underfunded", () => {
+    expect(computeGoalStatus(12000, 5000)).toEqual({ met: false, remaining: 7000 });
+  });
+
+  it("is met once assigned reaches the target, regardless of spending", () => {
+    expect(computeGoalStatus(12000, 12000)).toEqual({ met: true, remaining: 0 });
+    expect(computeGoalStatus(12000, 15000)).toEqual({ met: true, remaining: 0 });
+  });
+});
+
+describe("nextMonthKey", () => {
+  it("rolls over the year", () => {
+    expect(nextMonthKey("2025-12")).toBe("2026-01");
+  });
+
+  it("increments within a year", () => {
+    expect(nextMonthKey("2025-06")).toBe("2025-07");
+  });
+});
