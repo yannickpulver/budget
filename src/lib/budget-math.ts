@@ -18,6 +18,8 @@ export interface TxnInput {
   accountId: number;
   categoryId: number | null;
   amount: number;
+  /** Set for transfer legs — the account on the other side of the transfer. */
+  transferAccountId?: number | null;
 }
 
 export interface CategorySnapshot {
@@ -49,8 +51,13 @@ export function computeAvailable(
 
 /**
  * activity(cat, M) for every category touched this month, across on-budget
- * accounts. Categorized spend on a credit account also feeds its linked
- * payment category's activity (YNAB's "immediate category funding").
+ * accounts. Two credit-card effects feed the linked payment category:
+ *  - Categorized spend on a credit account *increases* its payment category's
+ *    available (YNAB's "immediate category funding" — the money owed is set
+ *    aside so the eventual payment is funded).
+ *  - A payment transfer from an on-budget account into the credit account
+ *    *reduces* the payment category's available by the payment amount (that
+ *    set-aside money is now spent paying the card). The mirror image.
  */
 export function computeCategoryActivity(
   transactions: TxnInput[],
@@ -62,7 +69,25 @@ export function computeCategoryActivity(
 
   for (const txn of transactions) {
     const account = accounts.get(txn.accountId);
-    if (!account || account.type === "tracking" || txn.categoryId == null) continue;
+    if (!account || account.type === "tracking") continue;
+
+    // Transfer leg (no category). A transfer into a credit account from an
+    // on-budget account is a card payment: reduce the payment category. The
+    // credit leg carries a positive amount (funds arriving to clear debt), so
+    // subtracting it lowers the payment category's available.
+    if (txn.categoryId == null) {
+      if (
+        account.type === "credit" &&
+        account.paymentCategoryId != null &&
+        txn.transferAccountId != null
+      ) {
+        const other = accounts.get(txn.transferAccountId);
+        if (other && other.type !== "tracking") {
+          bump(account.paymentCategoryId, -txn.amount);
+        }
+      }
+      continue;
+    }
 
     bump(txn.categoryId, txn.amount);
 
@@ -155,5 +180,12 @@ export function monthKey(isoDate: string): string {
 export function nextMonthKey(month: string): string {
   const [year, mon] = month.split("-").map(Number);
   const date = new Date(Date.UTC(year, mon - 1 + 1, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** The previous month key before `month` (YYYY-MM). */
+export function prevMonthKey(month: string): string {
+  const [year, mon] = month.split("-").map(Number);
+  const date = new Date(Date.UTC(year, mon - 1 - 1, 1));
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }

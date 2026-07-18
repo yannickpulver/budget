@@ -1,10 +1,7 @@
+import { redirect } from "next/navigation";
+
 export default function Home() {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 p-16 text-center">
-      <h1 className="text-2xl font-semibold tracking-tight">newbudget</h1>
-      <p className="text-muted-foreground max-w-md">
-        Foundation scaffolded — budget screen coming next.
-      </p>
-    </div>
-  );
+  const now = new Date();
+  const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  redirect(`/budget/${month}`);
 }

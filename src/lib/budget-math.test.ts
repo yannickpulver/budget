@@ -249,6 +249,67 @@ describe("credit-card payment-category feed", () => {
     expect(month.categories.get(GROCERIES)?.available).toBe(5000);
     expect(month.categories.get(PAYMENT_CAT)?.available).toBe(5000);
   });
+
+  it("a payment transfer into the credit account reduces the payment category", () => {
+    const accounts = accountsMap();
+    // Paying CHF 50 from checking to the card: the credit leg is +5000.
+    const activity = computeCategoryActivity(
+      [
+        {
+          accountId: CREDIT,
+          categoryId: null,
+          amount: 5000,
+          transferAccountId: CHECKING,
+        },
+        {
+          accountId: CHECKING,
+          categoryId: null,
+          amount: -5000,
+          transferAccountId: CREDIT,
+        },
+      ],
+      accounts
+    );
+    // Only the payment category moves — negative, mirroring a card purchase.
+    expect(activity.get(PAYMENT_CAT)).toBe(-5000);
+    expect(activity.size).toBe(1);
+  });
+
+  it("a transfer between two on-budget non-credit accounts never touches a payment category", () => {
+    const accounts = accountsMap();
+    const activity = computeCategoryActivity(
+      [
+        { accountId: CHECKING, categoryId: null, amount: -5000, transferAccountId: SAVINGS },
+        { accountId: SAVINGS, categoryId: null, amount: 5000, transferAccountId: CHECKING },
+      ],
+      accounts
+    );
+    expect(activity.size).toBe(0);
+  });
+
+  it("spend then payment nets the payment category to zero", () => {
+    const accounts = accountsMap();
+    const [month] = walkMonths(
+      [
+        {
+          // Assign 50 to Groceries, spend 50 on the card, then pay the card 50.
+          assignedByCategory: new Map([[GROCERIES, 5000]]),
+          transactions: [
+            { accountId: CREDIT, categoryId: GROCERIES, amount: -5000 },
+            { accountId: CREDIT, categoryId: null, amount: 5000, transferAccountId: CHECKING },
+            { accountId: CHECKING, categoryId: null, amount: -5000, transferAccountId: CREDIT },
+          ],
+        },
+      ],
+      [GROCERIES, PAYMENT_CAT],
+      accounts
+    );
+    // Spend fed the payment category +5000; the payment drew it back to 0.
+    expect(month.categories.get(PAYMENT_CAT)?.activity).toBe(0);
+    expect(month.categories.get(PAYMENT_CAT)?.available).toBe(0);
+    // Groceries is fully spent down.
+    expect(month.categories.get(GROCERIES)?.available).toBe(0);
+  });
 });
 
 describe("monthly goal underfunded calc", () => {
