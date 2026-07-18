@@ -12,6 +12,7 @@ import {
   getAccountDetail,
   renameAccount as renameAccountRow,
   setAccountClosed,
+  setAccountType,
   toggleTransactionCleared,
   updateTransaction as updateTransactionRow,
   invalidateBudgetCache,
@@ -76,6 +77,17 @@ export async function closeAccountAction(id: number): Promise<ActionResult> {
 
 export async function reopenAccountAction(id: number): Promise<ActionResult> {
   setAccountClosed(db, id, false);
+  refresh(id);
+  return { ok: true };
+}
+
+/**
+ * Switching between on-budget and tracking legitimately changes Ready to
+ * Assign — that's the point (e.g. flipping a mis-detected investment
+ * account to tracking). No special-casing.
+ */
+export async function updateAccountTypeAction(id: number, type: AccountType): Promise<ActionResult> {
+  setAccountType(db, id, type);
   refresh(id);
   return { ok: true };
 }
