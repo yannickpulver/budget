@@ -15,6 +15,7 @@
  * Pure — no DB access — driven entirely by `planAvailable` data. No
  * hardcoded category or account names.
  */
+import { computeMonthSnapshot, type AccountInfo, type TxnInput } from "./budget-math";
 import type { CreditCardLink, PlanAvailableEntry } from "./ynab-import";
 
 export interface PaymentCategoryAdjustment {
@@ -69,4 +70,102 @@ export function computePaymentCategoryAdjustments(params: {
     });
   }
   return adjustments;
+}
+
+/**
+ * Walk every month chronologically and, at each month where a payment
+ * category has a Plan.csv Available, produce the assignment delta that snaps
+ * our computed Available to YNAB's value — for EVERY month, not just the
+ * export's last one. YNAB's un-exported credit-card mechanics leave phantom
+ * Available in these categories in every historical month; snapping only the
+ * final month leaves the earlier months (and their Ready to Assign) wrong.
+ *
+ * The walk carries each month's snapped Available forward (overriding the
+ * payment categories to their Plan value) so month m+1's carry-in is
+ * `max(0, plan(m))` — exactly the clamp `computeMonthSnapshot` applies — and
+ * the delta booked at m+1 is computed against that already-corrected history.
+ * Because each month is snapped independently to its own Plan value, a
+ * negative Plan Available (YNAB does emit these for payment categories) is
+ * reproduced exactly rather than being lost to the carry clamp.
+ *
+ * Returns every delta needed, in chronological order. The caller books each
+ * as an additional assignment (see `adjustAssignment`); this function is pure
+ * and never touches the DB.
+ */
+export function computePaymentCategoryAdjustmentsAllMonths(params: {
+  months: string[];
+  categoryIds: number[];
+  accounts: Map<number, AccountInfo>;
+  /** Base assignment per `${month}:${categoryId}` (before any reconciliation delta). */
+  assignmentByKey: Map<string, number>;
+  txnsByMonth: Map<string, TxnInput[]>;
+  creditCardLinks: CreditCardLink[];
+  categoryIdByKey: Map<string, number>;
+  planAvailable: PlanAvailableEntry[];
+}): PaymentCategoryAdjustment[] {
+  const {
+    months,
+    categoryIds,
+    accounts,
+    assignmentByKey,
+    txnsByMonth,
+    creditCardLinks,
+    categoryIdByKey,
+    planAvailable,
+  } = params;
+
+  const paymentCategoryIds = new Set<number>();
+  for (const link of creditCardLinks) {
+    const id = categoryIdByKey.get(`${link.paymentGroupName}::${link.paymentCategoryName}`);
+    if (id != null) paymentCategoryIds.add(id);
+  }
+
+  const all: PaymentCategoryAdjustment[] = [];
+  let prevAvailable = new Map<number, number>();
+  let cumulativeFunds = 0;
+
+  for (const month of months) {
+    const assignedByCategory = new Map<number, number>();
+    for (const categoryId of categoryIds) {
+      const amount = assignmentByKey.get(`${month}:${categoryId}`);
+      if (amount != null) assignedByCategory.set(categoryId, amount);
+    }
+
+    const snapshot = computeMonthSnapshot({
+      categoryIds,
+      prevAvailable,
+      assignedByCategory,
+      monthTransactions: txnsByMonth.get(month) ?? [],
+      cumulativeOnBudgetFundsThroughPrevMonth: cumulativeFunds,
+      accounts,
+    });
+
+    const ourAvailableAtMonth = new Map<number, number>();
+    for (const categoryId of paymentCategoryIds) {
+      ourAvailableAtMonth.set(categoryId, snapshot.categories.get(categoryId)?.available ?? 0);
+    }
+
+    const monthAdjustments = computePaymentCategoryAdjustments({
+      creditCardLinks,
+      categoryIdByKey,
+      planAvailable,
+      ourAvailableAtMonth,
+      month,
+    });
+
+    // Carry each category's Available forward, overriding the payment
+    // categories we just snapped to their exact Plan value so the next
+    // month's replay (and its delta) sees the corrected history.
+    const nextAvailable = new Map<number, number>(
+      Array.from(snapshot.categories, ([id, s]) => [id, s.available])
+    );
+    for (const adjustment of monthAdjustments) {
+      nextAvailable.set(adjustment.categoryId, adjustment.planAvailable);
+      all.push(adjustment);
+    }
+    prevAvailable = nextAvailable;
+    cumulativeFunds = snapshot.cumulativeOnBudgetFunds;
+  }
+
+  return all;
 }
