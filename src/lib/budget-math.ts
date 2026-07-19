@@ -128,6 +128,13 @@ export function computeMonthSnapshot(params: {
   monthTransactions: TxnInput[];
   cumulativeOnBudgetFundsThroughPrevMonth: number;
   accounts: Map<number, AccountInfo>;
+  /**
+   * Flat minor-unit offset added to this month's Ready to Assign only (never
+   * to any category available, nor to the carried cumulative-funds state).
+   * Used for post-migration RTA alignment — see `rta_adjustment` in
+   * queries.ts. Defaults to 0.
+   */
+  readyToAssignAdjustment?: number;
 }): MonthSnapshot {
   const {
     categoryIds,
@@ -136,6 +143,7 @@ export function computeMonthSnapshot(params: {
     monthTransactions,
     cumulativeOnBudgetFundsThroughPrevMonth,
     accounts,
+    readyToAssignAdjustment = 0,
   } = params;
 
   const activity = computeCategoryActivity(monthTransactions, accounts);
@@ -156,7 +164,7 @@ export function computeMonthSnapshot(params: {
 
   return {
     categories,
-    readyToAssign: cumulativeOnBudgetFunds - totalAvailable,
+    readyToAssign: cumulativeOnBudgetFunds - totalAvailable + readyToAssignAdjustment,
     cumulativeOnBudgetFunds,
   };
 }

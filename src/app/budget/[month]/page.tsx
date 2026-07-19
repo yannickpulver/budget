@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronDown, ChevronLeft, ChevronRight, Tags, Wallet } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Info, Tags, Wallet } from "lucide-react";
 import { db } from "@/db";
 import { prevMonthKey, nextMonthKey } from "@/lib/budget-math";
 import { formatCurrency, formatMoney } from "@/lib/currency";
@@ -11,6 +11,7 @@ import {
   listAccounts,
   type CategoryView,
   type GroupView,
+  type RtaAdjustment,
 } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { AssignCell } from "./assign-cell";
@@ -78,6 +79,7 @@ export default async function BudgetPage({
         readyToAssign={view.readyToAssign}
         totalUnderfunded={view.totalUnderfunded}
         currency={view.currency}
+        rtaAdjustment={view.rtaAdjustment}
       />
 
       <div className="px-4 py-3">
@@ -141,6 +143,7 @@ function Header({
   readyToAssign,
   totalUnderfunded,
   currency,
+  rtaAdjustment,
 }: {
   month: string;
   hasPrev: boolean;
@@ -149,6 +152,7 @@ function Header({
   readyToAssign: number;
   totalUnderfunded: number;
   currency: string;
+  rtaAdjustment: RtaAdjustment | null;
 }) {
   const rtaClass =
     readyToAssign > 0
@@ -156,6 +160,11 @@ function Header({
       : readyToAssign < 0
         ? "text-red-600"
         : "text-muted-foreground";
+
+  const adjustmentHint =
+    rtaAdjustment != null
+      ? `Includes migration alignment of ${formatCurrency(rtaAdjustment.amount, currency)}, set ${monthLabel(rtaAdjustment.month)}`
+      : undefined;
 
   return (
     <header className="flex items-end justify-between gap-6 border-b border-border px-4 py-3">
@@ -178,10 +187,17 @@ function Header({
       </div>
 
       <div className="text-right">
-        <div className={cn("text-2xl font-semibold tabular-nums", rtaClass)}>
+        <div className={cn("text-2xl font-semibold tabular-nums", rtaClass)} title={adjustmentHint}>
           {formatCurrency(readyToAssign, currency)}
         </div>
-        <div className="text-xs text-muted-foreground">Ready to Assign</div>
+        <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
+          Ready to Assign
+          {adjustmentHint != null && (
+            <span title={adjustmentHint} aria-label={adjustmentHint} className="cursor-help text-muted-foreground/60">
+              <Info className="size-3" />
+            </span>
+          )}
+        </div>
         {totalUnderfunded > 0 && (
           <div className="mt-0.5 text-xs text-amber-600 tabular-nums">
             {formatCurrency(totalUnderfunded, currency)} still needed for goals

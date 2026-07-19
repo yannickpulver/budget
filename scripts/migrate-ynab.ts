@@ -465,6 +465,27 @@ function main() {
     console.log(`  ${account.name}: ${formatRappen(balanceByAccountName.get(account.name) ?? 0)}`);
   }
 
+  // The migration wipes budget data but deliberately leaves the `settings`
+  // table alone (currency, etc.). A leftover RTA alignment adjustment from a
+  // previous migration would silently apply to this freshly imported data and
+  // almost certainly be wrong now — warn so it gets re-run or cleared. It does
+  // NOT double-count with the reconciliation above: reconciliation books
+  // payment-category deltas as assignments (moving category Available), while
+  // the adjustment is a flat offset on Ready to Assign only — and the RTA
+  // figures printed above are computed without it.
+  const rtaAdjustmentRow = sqlite
+    .prepare("SELECT value FROM settings WHERE key = 'rta_adjustment'")
+    .get() as { value: string } | undefined;
+  if (rtaAdjustmentRow != null) {
+    console.warn(
+      "\n=== Note: stale RTA alignment adjustment present ===\n" +
+        `  A previous 'rta_adjustment' setting (${formatRappen(Number(rtaAdjustmentRow.value))}) survived this\n` +
+        "  migration and will apply to the freshly imported data. If your Ready to\n" +
+        "  Assign still differs from YNAB, re-run 'pnpm align:rta <target> <month>'\n" +
+        "  to recompute it; otherwise clear the 'rta_adjustment' setting."
+    );
+  }
+
   if (report.regularMismatches > 0) {
     console.error(
       `\nFAILED: ${report.regularMismatches} non-credit-payment category-months did not match Plan.csv.`
