@@ -23,6 +23,7 @@ const TYPE_LABEL: Record<AccountDetail["type"], string> = {
   savings: "Savings",
   cash: "Cash",
   credit: "Credit card",
+  giftcard: "Giftcard",
   tracking: "Tracking",
 };
 

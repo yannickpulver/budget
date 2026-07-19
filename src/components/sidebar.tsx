@@ -22,7 +22,10 @@ export function Sidebar({ data }: { data: SidebarData }) {
   const pathname = usePathname();
   const [closedOpen, setClosedOpen] = useState(false);
   const hasAnyAccounts =
-    data.budget.length > 0 || data.tracking.length > 0 || data.closed.length > 0;
+    data.budget.length > 0 ||
+    data.giftcards.length > 0 ||
+    data.tracking.length > 0 ||
+    data.closed.length > 0;
 
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-sidebar">
@@ -52,6 +55,12 @@ export function Sidebar({ data }: { data: SidebarData }) {
           title="Budget"
           accounts={data.budget}
           total={data.budgetTotal}
+          pathname={pathname}
+        />
+        <AccountGroup
+          title="Giftcards"
+          accounts={data.giftcards}
+          total={data.giftcardsTotal}
           pathname={pathname}
         />
         <AccountGroup

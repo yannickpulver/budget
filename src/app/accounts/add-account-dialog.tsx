@@ -25,6 +25,7 @@ const TYPE_OPTIONS: Array<{ value: AccountType; label: string }> = [
   { value: "savings", label: "Savings" },
   { value: "cash", label: "Cash" },
   { value: "credit", label: "Credit card" },
+  { value: "giftcard", label: "Giftcard" },
   { value: "tracking", label: "Tracking (investments, loans…)" },
 ];
 

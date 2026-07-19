@@ -10,7 +10,7 @@ export const accounts = sqliteTable("accounts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
   type: text("type", {
-    enum: ["checking", "savings", "cash", "credit", "tracking"],
+    enum: ["checking", "savings", "cash", "credit", "giftcard", "tracking"],
   }).notNull(),
   closed: integer("closed", { mode: "boolean" }).notNull().default(false),
   sort: integer("sort").notNull().default(0),

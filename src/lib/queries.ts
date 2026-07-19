@@ -544,9 +544,12 @@ export function listAccountBalances(dbi: DB = db): AccountBalance[] {
 export interface SidebarData {
   currency: string;
   budget: AccountBalance[];
+  giftcards: AccountBalance[];
   tracking: AccountBalance[];
   closed: AccountBalance[];
+  /** Includes giftcards (see `giftcardsTotal`) — they're on-budget funds. */
   budgetTotal: number;
+  giftcardsTotal: number;
   trackingTotal: number;
   netWorth: number;
 }
@@ -560,17 +563,23 @@ export function getSidebarData(dbi: DB = db): SidebarData {
   const all = listAccountBalances(dbi);
   const open = all.filter((a) => !a.closed);
   const closed = all.filter((a) => a.closed);
-  const budget = open.filter((a) => a.type !== "tracking");
+  const budget = open.filter((a) => a.type !== "tracking" && a.type !== "giftcard");
+  const giftcards = open.filter((a) => a.type === "giftcard");
   const tracking = open.filter((a) => a.type === "tracking");
-  const budgetTotal = sumBalances(budget);
+  const giftcardsTotal = sumBalances(giftcards);
+  // Giftcards render in their own compact section but are on-budget funds,
+  // so they're folded into the Budget subtotal (and, via it, net worth).
+  const budgetTotal = sumBalances(budget) + giftcardsTotal;
   const trackingTotal = sumBalances(tracking);
 
   return {
     currency: getCurrency(dbi),
     budget,
+    giftcards,
     tracking,
     closed,
     budgetTotal,
+    giftcardsTotal,
     trackingTotal,
     netWorth: budgetTotal + trackingTotal,
   };
