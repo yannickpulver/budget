@@ -28,7 +28,8 @@ CREATE TABLE accounts (
   type TEXT NOT NULL,
   closed INTEGER NOT NULL DEFAULT 0,
   sort INTEGER NOT NULL DEFAULT 0,
-  payment_category_id INTEGER
+  payment_category_id INTEGER,
+  icon TEXT
 );
 CREATE TABLE category_groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
