@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:push": "drizzle-kit push",
-    "migrate:ynab": "tsx scripts/migrate-ynab.ts"
+    "migrate:ynab": "tsx scripts/migrate-ynab.ts",
+    "align:rta": "tsx scripts/align-rta.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

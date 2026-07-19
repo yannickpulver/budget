@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as schema from "@/db/schema";
-import { loadBudgetData, SnapshotStore } from "./queries";
+import { computeAlignmentAdjustment, loadBudgetData, SnapshotStore } from "./queries";
 import type { MonthSnapshot } from "./budget-math";
 
 /**
@@ -152,5 +152,85 @@ describe("SnapshotStore", () => {
 
     const fresh = new SnapshotStore(loader).getSnapshot("2025-02");
     expect(normalize(after)).toEqual(normalize(fresh));
+  });
+});
+
+describe("RTA alignment adjustment", () => {
+  const loader = () => loadBudgetData(makeDb());
+
+  function setAdjustment(amount: number, month: string) {
+    sqlite
+      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+      .run("rta_adjustment", String(amount));
+    sqlite
+      .prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+      .run("rta_adjustment_month", month);
+  }
+
+  it("applies from its month onward, not before", () => {
+    const raw = new SnapshotStore(loader);
+    const rawJan = raw.getSnapshot("2025-01").readyToAssign;
+    const rawFeb = raw.getSnapshot("2025-02").readyToAssign;
+
+    setAdjustment(10000, "2025-02");
+    const store = new SnapshotStore(loader);
+    // January is before the adjustment month — untouched.
+    expect(store.getSnapshot("2025-01").readyToAssign).toBe(rawJan);
+    // February and onward carry the flat offset.
+    expect(store.getSnapshot("2025-02").readyToAssign).toBe(rawFeb + 10000);
+  });
+
+  it("persists as a constant offset across later months with no clamp bounce", () => {
+    const raw = new SnapshotStore(loader);
+    const rawFeb = raw.getSnapshot("2025-02").readyToAssign;
+    // March has no transactions/assignments — a pure carry-forward month.
+    const rawMar = raw.getSnapshot("2025-03").readyToAssign;
+
+    setAdjustment(-2500, "2025-02");
+    const store = new SnapshotStore(loader);
+    // The offset is identical every month it applies — it never compounds or
+    // bounces off the overspend clamp because it's added to RTA only, on top
+    // of a clean carried cumulative-funds state.
+    expect(store.getSnapshot("2025-02").readyToAssign - rawFeb).toBe(-2500);
+    expect(store.getSnapshot("2025-03").readyToAssign - rawMar).toBe(-2500);
+  });
+
+  it("never touches category availables or the carried funds state", () => {
+    const raw = normalize(new SnapshotStore(loader).getSnapshot("2025-02"));
+
+    setAdjustment(99999, "2025-01");
+    const adjusted = new SnapshotStore(loader).getSnapshot("2025-02");
+    // Only readyToAssign moves; every category cell and the cumulative funds
+    // carry are byte-for-byte identical.
+    expect(adjusted.cumulativeOnBudgetFunds).toBe(raw.cumulativeOnBudgetFunds);
+    expect(
+      Array.from(adjusted.categories.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([id, cell]) => [id, cell.assigned, cell.activity, cell.available])
+    ).toEqual(raw.categories);
+  });
+
+  it("reflects a changed adjustment only after cache invalidation", () => {
+    setAdjustment(10000, "2025-01");
+    const store = new SnapshotStore(loader);
+    const before = store.getSnapshot("2025-02");
+    const baseline = before.readyToAssign;
+
+    // Change the stored adjustment out from under the cache.
+    setAdjustment(30000, "2025-01");
+    expect(store.getSnapshot("2025-02")).toBe(before); // stale
+
+    store.invalidate();
+    expect(store.getSnapshot("2025-02").readyToAssign).toBe(baseline + 20000);
+  });
+
+  it("computeAlignmentAdjustment snaps raw RTA to target and is idempotent", () => {
+    // No existing adjustment: delta is target − current.
+    expect(computeAlignmentAdjustment(32895, -225346, 0)).toBe(258241);
+    // Re-aligning with an adjustment already applied recovers the raw RTA
+    // first, so the result is the same, not compounded.
+    expect(computeAlignmentAdjustment(32895, 32895, 258241)).toBe(258241);
+    // Aligning to a new target with an existing adjustment in place.
+    expect(computeAlignmentAdjustment(50000, 32895, 258241)).toBe(275346);
   });
 });
