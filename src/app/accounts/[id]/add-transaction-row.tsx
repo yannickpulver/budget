@@ -4,7 +4,7 @@ import { Plus } from "lucide-react";
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { parseMoneyInput } from "@/lib/currency";
+import { evaluateMoneyExpression } from "@/lib/currency";
 import type { CategoryGroupOption, TransferTarget } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { createTransactionAction, createTransferAction } from "../actions";
@@ -51,10 +51,11 @@ export function AddTransactionRow({
     }
     let amount: number | null = null;
     if (outflow.trim() !== "") {
-      const parsed = parseMoneyInput(outflow);
+      const parsed = evaluateMoneyExpression(outflow);
       amount = parsed == null ? null : -Math.abs(parsed);
     } else if (inflow.trim() !== "") {
-      amount = parseMoneyInput(inflow);
+      const parsed = evaluateMoneyExpression(inflow);
+      amount = parsed == null ? null : Math.abs(parsed);
     }
     if (amount == null || amount === 0) {
       setError("Enter an outflow or inflow amount.");

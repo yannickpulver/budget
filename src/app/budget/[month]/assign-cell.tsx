@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { cn } from "@/lib/utils";
-import { formatMoney, parseMoneyInput } from "@/lib/currency";
+import { evaluateMoneyExpression, formatMoney } from "@/lib/currency";
 import { setAssigned } from "../actions";
 
 export function AssignCell({
@@ -25,7 +25,7 @@ export function AssignCell({
 
   function commitAndClose() {
     setEditing(false);
-    const parsed = value.trim() === "" ? 0 : parseMoneyInput(value);
+    const parsed = value.trim() === "" ? 0 : evaluateMoneyExpression(value);
     const next = parsed == null ? assigned : parsed;
     if (next === assigned) return;
     startTransition(() => setAssigned(month, categoryId, next));
