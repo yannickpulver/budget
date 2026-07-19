@@ -55,9 +55,19 @@ export function CategoryTransferSelect({
     value.kind === "transfer" ? transferTargets.find((a) => a.id === value.accountId) : undefined;
   const needsLinkedCategory = value.kind === "transfer" && transferTarget?.type === "tracking";
 
+  // See CategorySelect: `items` lets Select.Value resolve a label before the
+  // popup has ever been opened, instead of showing the raw encoded value.
+  const items = [
+    { value: "rta", label: "Ready to Assign" },
+    ...groups.flatMap((group) =>
+      group.categories.map((category) => ({ value: `cat:${category.id}`, label: category.name }))
+    ),
+    ...transferTargets.map((account) => ({ value: `xfer:${account.id}`, label: account.name })),
+  ];
+
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <Select value={encode(value)} onValueChange={onPrimaryChange}>
+      <Select items={items} value={encode(value)} onValueChange={onPrimaryChange}>
         <SelectTrigger className="w-full min-w-0">
           <SelectValue placeholder="Category" />
         </SelectTrigger>
