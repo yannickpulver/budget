@@ -10,7 +10,7 @@
  * `data_version` pragma — see `SnapshotStore`.
  */
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import {
   computeCategoryActivityEntries,
@@ -28,6 +28,7 @@ import {
 import { computeImportHash, resolveCategoryName, type ParsedImportRow } from "./csv-import";
 import { formatMoney } from "./currency";
 import { fetchYahooQuote, fxSymbol, isStale, toBudgetMinorUnits } from "./prices";
+import { computeSwissquoteImportHash, type ParsedStatement, type StatementEntry } from "./swissquote-import";
 import { db, sqlite } from "@/db";
 import * as schema from "@/db/schema";
 
@@ -1632,4 +1633,275 @@ export function syncHoldingsBalance(dbi: DB, accountId: number): SyncBalanceResu
   });
 
   return { ok: true, delta };
+}
+
+/**
+ * Swissquote statement import (see `swissquote-import.ts` for text
+ * extraction/parsing). "Boundary" rows (Anfangsbestand/Schlussbilanz) and
+ * "other" rows (FX conversions between the account's currency
+ * sub-ledgers — internal shuffling, not a real cash flow) are excluded from
+ * the preview entirely; they only mattered for the parser's internal
+ * balance check.
+ */
+
+function addDaysIso(iso: string, days: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** A deposit ("Zahlung von") counts as already recorded if any transaction in this account has the same amount within ±3 days. */
+function matchExistingDeposit(dbi: DB, accountId: number, date: string, amount: number): boolean {
+  const match = dbi
+    .select({ id: schema.transactions.id })
+    .from(schema.transactions)
+    .where(
+      and(
+        eq(schema.transactions.accountId, accountId),
+        eq(schema.transactions.amount, amount),
+        gte(schema.transactions.date, addDaysIso(date, -3)),
+        lte(schema.transactions.date, addDaysIso(date, 3))
+      )
+    )
+    .get();
+  return match != null;
+}
+
+export interface SwissquotePreviewRow {
+  /** Groups rows for commit-time whole-statement idempotency — see `commitSwissquoteImport`. */
+  statementKey: string;
+  key: string;
+  date: string;
+  kind: Exclude<StatementEntry["kind"], "other" | "boundary">;
+  rawType: string;
+  currency: string;
+  /** Signed minor units in the row's own (statement section) currency. */
+  amount: number;
+  ticker?: string;
+  yahooSymbol?: string;
+  name?: string;
+  /** Buy/sell share count. */
+  quantity?: number;
+  /** Buy/sell only: holding quantity after applying this row (and every earlier row for the same symbol in this preview batch). */
+  resultingQuantity?: number;
+  /** False for a dividend/interest/fee/deposit in a currency other than the budget's — shown info-only, never applied. */
+  bookable: boolean;
+  payee?: string;
+  /** Already applied in an earlier commit (this or an overlapping statement) — unchecked by default. */
+  isDuplicate: boolean;
+  /** Deposit only: an existing transaction already covers this amount within ±3 days — unchecked by default. */
+  exists: boolean;
+  importHash: string;
+}
+
+export interface SwissquoteStatementSummary {
+  statementKey: string;
+  periodStart: string;
+  periodEnd: string;
+}
+
+export interface SwissquotePreview {
+  rows: SwissquotePreviewRow[];
+  statements: SwissquoteStatementSummary[];
+}
+
+function swissquoteStatementKey(accountId: number, statement: ParsedStatement): string {
+  return `sq:${accountId}:${statement.periodStart}:${statement.periodEnd}`;
+}
+
+function swissquotePayee(entry: StatementEntry): string {
+  if (entry.kind === "dividend") return `Dividend: ${entry.ticker ?? "?"}`;
+  if (entry.kind === "interest") return "Interest";
+  if (entry.kind === "fee") return "Swissquote fees";
+  return "Deposit";
+}
+
+/**
+ * Build the combined preview for one or more parsed statements (processed
+ * in period order, as required when several PDFs are uploaded together).
+ * Never writes to the DB.
+ */
+export function buildSwissquotePreview(dbi: DB, accountId: number, statements: ParsedStatement[]): SwissquotePreview {
+  const budgetCurrency = getCurrency(dbi);
+
+  const qtyBySymbol = new Map(
+    dbi
+      .select({ symbol: schema.holdings.symbol, quantity: schema.holdings.quantity })
+      .from(schema.holdings)
+      .where(eq(schema.holdings.accountId, accountId))
+      .all()
+      .map((h) => [h.symbol, h.quantity])
+  );
+
+  const existingHashes = new Set(
+    dbi
+      .select({ importHash: schema.importedStatementRows.importHash })
+      .from(schema.importedStatementRows)
+      .where(eq(schema.importedStatementRows.accountId, accountId))
+      .all()
+      .map((r) => r.importHash)
+  );
+  const seenInBatch = new Set<string>();
+
+  const sorted = [...statements].sort((a, b) => a.periodStart.localeCompare(b.periodStart));
+  const rows: SwissquotePreviewRow[] = [];
+  const summaries: SwissquoteStatementSummary[] = [];
+  let rowSeq = 0;
+
+  for (const statement of sorted) {
+    const statementKey = swissquoteStatementKey(accountId, statement);
+    summaries.push({ statementKey, periodStart: statement.periodStart, periodEnd: statement.periodEnd });
+
+    for (const section of statement.sections) {
+      for (const entry of section.entries) {
+        if (entry.kind === "boundary" || entry.kind === "other") continue;
+
+        const importHash = computeSwissquoteImportHash(accountId, entry);
+        const isDuplicate = existingHashes.has(importHash) || seenInBatch.has(importHash);
+        seenInBatch.add(importHash);
+        const key = `r${rowSeq++}`;
+
+        if (entry.kind === "buy" || entry.kind === "sell") {
+          // Parser guarantees ticker+quantity on every buy/sell row — see swissquote-import.ts.
+          const symbol = entry.yahooSymbol!;
+          const current = qtyBySymbol.get(symbol) ?? 0;
+          const resultingQuantity = entry.kind === "buy" ? current + entry.quantity! : current - entry.quantity!;
+          qtyBySymbol.set(symbol, resultingQuantity);
+          rows.push({
+            statementKey,
+            key,
+            date: entry.date,
+            kind: entry.kind,
+            rawType: entry.rawType,
+            currency: entry.currency,
+            amount: entry.amount,
+            ticker: entry.ticker,
+            yahooSymbol: symbol,
+            name: entry.name,
+            quantity: entry.quantity,
+            resultingQuantity,
+            bookable: true,
+            isDuplicate,
+            exists: false,
+            importHash,
+          });
+          continue;
+        }
+
+        const bookable = entry.currency === budgetCurrency;
+        const exists = entry.kind === "deposit" && bookable ? matchExistingDeposit(dbi, accountId, entry.date, entry.amount) : false;
+
+        rows.push({
+          statementKey,
+          key,
+          date: entry.date,
+          kind: entry.kind,
+          rawType: entry.rawType,
+          currency: entry.currency,
+          amount: entry.amount,
+          ticker: entry.ticker,
+          name: entry.name,
+          bookable,
+          payee: swissquotePayee(entry),
+          isDuplicate,
+          exists,
+          importHash,
+        });
+      }
+    }
+  }
+
+  return { rows, statements: summaries };
+}
+
+export interface SwissquoteRowInput {
+  statementKey: string;
+  kind: Exclude<StatementEntry["kind"], "other" | "boundary">;
+  date: string;
+  /** Signed minor units; used for the transaction kinds (dividend/interest/fee/deposit). */
+  amount: number;
+  quantity?: number;
+  yahooSymbol?: string;
+  name?: string;
+  payee?: string;
+  importHash: string;
+}
+
+/**
+ * Apply the checked preview rows: buy/sell update (or create) the holding's
+ * quantity, everything else books an uncategorized transaction (tracking
+ * accounts don't budget). One DB transaction.
+ *
+ * Idempotent at two levels: whole-statement (grouped by `statementKey`,
+ * deterministically `sq:<account>:<periodStart>:<periodEnd>` — reuses
+ * `import_batches`, same ledger and pattern as the CSV importer's
+ * `commitImport`) and per-row (`imported_statement_rows`, keyed by the
+ * bank's reference number) so a statement whose period overlaps an earlier
+ * import doesn't double-apply the rows they share.
+ */
+export function commitSwissquoteImport(dbi: DB, accountId: number, rows: SwissquoteRowInput[]): number {
+  return dbi.transaction((tx) => {
+    const byStatement = new Map<string, SwissquoteRowInput[]>();
+    for (const row of rows) {
+      const group = byStatement.get(row.statementKey);
+      if (group) group.push(row);
+      else byStatement.set(row.statementKey, [row]);
+    }
+
+    const now = new Date().toISOString();
+    let committed = 0;
+
+    for (const [statementKey, statementRows] of byStatement) {
+      const alreadyCommitted = tx
+        .select({ count: schema.importBatches.count })
+        .from(schema.importBatches)
+        .where(eq(schema.importBatches.id, statementKey))
+        .get();
+      if (alreadyCommitted) continue; // whole statement already imported — hard no-op
+
+      for (const row of statementRows) {
+        if (row.kind === "buy" || row.kind === "sell") {
+          if (!row.yahooSymbol || row.quantity == null) continue;
+          const delta = row.kind === "buy" ? row.quantity : -row.quantity;
+          const existing = tx
+            .select()
+            .from(schema.holdings)
+            .where(and(eq(schema.holdings.accountId, accountId), eq(schema.holdings.symbol, row.yahooSymbol)))
+            .get();
+          if (existing) {
+            tx.update(schema.holdings)
+              .set({ quantity: existing.quantity + delta })
+              .where(eq(schema.holdings.id, existing.id))
+              .run();
+          } else {
+            tx.insert(schema.holdings)
+              .values({ accountId, symbol: row.yahooSymbol, name: row.name ?? "", quantity: delta })
+              .run();
+          }
+        } else {
+          tx.insert(schema.transactions)
+            .values({
+              accountId,
+              date: row.date,
+              payee: row.payee ?? "",
+              categoryId: null,
+              memo: "",
+              amount: row.amount,
+              cleared: true,
+              importHash: row.importHash,
+            })
+            .run();
+        }
+
+        tx.insert(schema.importedStatementRows).values({ accountId, importHash: row.importHash, committedAt: now }).run();
+        committed++;
+      }
+
+      tx.insert(schema.importBatches)
+        .values({ id: statementKey, accountId, count: statementRows.length, committedAt: now })
+        .run();
+    }
+
+    return committed;
+  });
 }

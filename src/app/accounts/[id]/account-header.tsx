@@ -17,6 +17,7 @@ import {
   updateAccountTypeAction,
 } from "../actions";
 import { ImportCsvDialog } from "./import-csv-dialog";
+import { ImportStatementDialog } from "./import-statement-dialog";
 
 const TYPE_LABEL: Record<AccountDetail["type"], string> = {
   checking: "Checking",
@@ -165,6 +166,9 @@ export function AccountHeader({ detail }: { detail: AccountDetail }) {
           </div>
           <div className="flex gap-1.5">
             <ImportCsvDialog accountId={detail.id} currency={detail.currency} />
+            {detail.type === "tracking" && (
+              <ImportStatementDialog accountId={detail.id} currency={detail.currency} />
+            )}
             <Button
               size="sm"
               variant="outline"
