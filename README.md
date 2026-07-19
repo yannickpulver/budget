@@ -129,6 +129,26 @@ pass `--force`.
    to be re-entered by hand afterwards (Settings → Categories or the target
    icon on the budget view) — usually just a handful of categories.
 
+6. **If your Ready to Assign differs after migration**, align it once. Every
+   category's Available reproduces YNAB exactly, but Ready to Assign can still
+   differ by a fixed amount: YNAB's is a path-dependent running ledger whose
+   credit-card internals (historical card overspending routed to card debt
+   rather than to Ready to Assign) aren't part of the CSV export, while ours
+   is the plain identity `funds − Σ assigned-available`. Snap it to the number
+   YNAB shows with a one-time flat adjustment:
+
+   ```bash
+   pnpm align:rta 328.95 2026-07
+   ```
+
+   where `328.95` is the Ready to Assign YNAB shows and `2026-07` is the month
+   you're aligning from. The adjustment applies to that month and every later
+   month, shows as a subtle hint on the budget header, and never touches any
+   category, account balance, or the verification report. Re-run it any time
+   (it replaces, never compounds). It's stored in `settings` and survives a
+   re-migration — if you re-import, re-run `align:rta` (the migration warns you
+   when a previous adjustment is still present).
+
 ## Ongoing CSV import
 
 Each account page has an **Import CSV** button for adding bank-statement

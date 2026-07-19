@@ -46,6 +46,27 @@ export interface GroupMeta {
   sort: number;
 }
 
+/**
+ * Post-migration Ready to Assign alignment. YNAB's internal credit-card
+ * mechanics make its Ready to Assign a path-dependent running ledger, while
+ * ours is the identity `funds − Σ available`; historical credit-card
+ * overspending YNAB routes to card debt, our overspend clamp charges to RTA.
+ * The two therefore differ by a fixed amount after a migration even when every
+ * category available matches. This flat offset (set once via `pnpm align:rta`)
+ * is added to Ready to Assign from `month` onward — never to any category,
+ * account balance, or the verification. See `SETTING_RTA_ADJUSTMENT`.
+ */
+export interface RtaAdjustment {
+  /** Minor units, signed. */
+  amount: number;
+  /** YYYY-MM — applies to this month and every later month. */
+  month: string;
+}
+
+export const SETTING_RTA_ADJUSTMENT = "rta_adjustment";
+export const SETTING_RTA_ADJUSTMENT_MONTH = "rta_adjustment_month";
+const MONTH_RE = /^\d{4}-\d{2}$/;
+
 export interface BudgetData {
   accounts: Map<number, AccountInfo>;
   groups: GroupMeta[];
@@ -55,6 +76,7 @@ export interface BudgetData {
   txnsByMonth: Map<string, TxnInput[]>;
   earliestMonth: string | null;
   currency: string;
+  rtaAdjustment: RtaAdjustment | null;
 }
 
 /** Read the whole budget into memory (one pass per cache lifetime). */
@@ -139,11 +161,8 @@ export function loadBudgetData(dbi: DB): BudgetData {
     if (earliestMonth === null || month < earliestMonth) earliestMonth = month;
   }
 
-  const currencyRow = dbi
-    .select()
-    .from(schema.settings)
-    .all()
-    .find((s) => s.key === "currency");
+  const settingsRows = dbi.select().from(schema.settings).all();
+  const getSetting = (key: string) => settingsRows.find((s) => s.key === key)?.value;
 
   return {
     accounts,
@@ -153,8 +172,27 @@ export function loadBudgetData(dbi: DB): BudgetData {
     assignmentsByMonth,
     txnsByMonth,
     earliestMonth,
-    currency: currencyRow?.value ?? DEFAULT_CURRENCY,
+    currency: getSetting("currency") ?? DEFAULT_CURRENCY,
+    rtaAdjustment: parseRtaAdjustment(
+      getSetting(SETTING_RTA_ADJUSTMENT),
+      getSetting(SETTING_RTA_ADJUSTMENT_MONTH)
+    ),
   };
+}
+
+/**
+ * Parse the two persisted settings into an adjustment, tolerating missing or
+ * malformed values (returns null) so a hand-edited settings row can never make
+ * the budget throw.
+ */
+export function parseRtaAdjustment(
+  amountRaw: string | undefined,
+  month: string | undefined
+): RtaAdjustment | null {
+  if (amountRaw == null || month == null) return null;
+  const amount = Number(amountRaw);
+  if (!Number.isFinite(amount) || !MONTH_RE.test(month)) return null;
+  return { amount: Math.round(amount), month };
 }
 
 interface Cursor {
@@ -206,6 +244,8 @@ export class SnapshotStore {
     let m =
       this.cursor.month === null ? data.earliestMonth : nextMonthKey(this.cursor.month);
     while (m <= month) {
+      const adj = data.rtaAdjustment;
+      const readyToAssignAdjustment = adj && m >= adj.month ? adj.amount : 0;
       const snapshot = computeMonthSnapshot({
         categoryIds: data.categoryIds,
         prevAvailable: this.cursor.prevAvailable,
@@ -213,6 +253,7 @@ export class SnapshotStore {
         monthTransactions: data.txnsByMonth.get(m) ?? [],
         cumulativeOnBudgetFundsThroughPrevMonth: this.cursor.cumulativeFunds,
         accounts: data.accounts,
+        readyToAssignAdjustment,
       });
       this.snapshots.set(m, snapshot);
       this.cursor = {
@@ -259,6 +300,8 @@ export interface BudgetView {
   readyToAssign: number;
   totalUnderfunded: number;
   groups: GroupView[];
+  /** Set when a post-migration RTA alignment is in effect for this month (for a subtle header hint). */
+  rtaAdjustment: RtaAdjustment | null;
 }
 
 /** YYYY-MM for the given date (defaults to now). */
@@ -324,6 +367,7 @@ export function getBudgetView(month: string): BudgetView {
     })
     .filter((group) => group.categories.length > 0);
 
+  const adj = data.rtaAdjustment;
   return {
     month,
     months,
@@ -331,7 +375,37 @@ export function getBudgetView(month: string): BudgetView {
     readyToAssign: snapshot.readyToAssign,
     totalUnderfunded,
     groups,
+    rtaAdjustment: adj && month >= adj.month ? adj : null,
   };
+}
+
+/**
+ * The adjustment that snaps Ready to Assign at `month` from its current value
+ * to `targetMinor`. `currentRta` is the app's RTA for that month *with any
+ * existing adjustment already applied*, and `appliedAdjustment` is how much of
+ * that came from an existing adjustment — subtracting it recovers the raw
+ * (unadjusted) RTA, so re-aligning is idempotent rather than compounding.
+ */
+export function computeAlignmentAdjustment(
+  targetMinor: number,
+  currentRta: number,
+  appliedAdjustment: number
+): number {
+  return targetMinor - (currentRta - appliedAdjustment);
+}
+
+/** Upsert the two RTA-alignment settings. Caller must `invalidateBudgetCache()`. */
+export function setRtaAdjustment(dbi: DB, amount: number, month: string): void {
+  upsertSetting(dbi, SETTING_RTA_ADJUSTMENT, String(Math.round(amount)));
+  upsertSetting(dbi, SETTING_RTA_ADJUSTMENT_MONTH, month);
+}
+
+function upsertSetting(dbi: DB, key: string, value: string): void {
+  dbi
+    .insert(schema.settings)
+    .values({ key, value })
+    .onConflictDoUpdate({ target: schema.settings.key, set: { value } })
+    .run();
 }
 
 /**
