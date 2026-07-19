@@ -312,8 +312,17 @@ export function TransactionRow({
     commit();
   }
 
+  const isFuture = row.date > new Date().toISOString().slice(0, 10);
+
   return (
-    <div className={cn(REGISTER_GRID, "group px-2 py-1.5 text-sm", pending && "opacity-50")}>
+    <div
+      className={cn(
+        REGISTER_GRID,
+        "group px-2 py-1.5 text-sm",
+        isFuture && "bg-sky-50/60 text-muted-foreground",
+        pending && "opacity-50"
+      )}
+    >
       <EditableCell
         editing={editingField === "date"}
         onStartEdit={() => setEditingField("date")}
