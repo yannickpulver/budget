@@ -318,7 +318,7 @@ export function TransactionRow({
     <div
       className={cn(
         REGISTER_GRID,
-        "group px-2 py-1.5 text-sm",
+        "group px-2 py-0.5 text-sm",
         isFuture && "bg-sky-50/60 text-muted-foreground",
         pending && "opacity-50"
       )}
