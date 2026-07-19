@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -232,5 +235,76 @@ describe("RTA alignment adjustment", () => {
     expect(computeAlignmentAdjustment(32895, 32895, 258241)).toBe(258241);
     // Aligning to a new target with an existing adjustment in place.
     expect(computeAlignmentAdjustment(50000, 32895, 258241)).toBe(275346);
+  });
+});
+
+describe("SnapshotStore data_version guard", () => {
+  // Unlike the ":memory:" fixture above, this needs a real file on disk so a
+  // *second* connection can open it alongside the store's own connection —
+  // reproducing e.g. `pnpm migrate:ynab` writing to the same DB file while
+  // the server (holding the first connection) is still running.
+  let tmpDir: string;
+  let dbPath: string;
+  let ownConn: Database.Database;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "newbudget-data-version-"));
+    dbPath = path.join(tmpDir, "scratch.db");
+    ownConn = new Database(dbPath);
+    ownConn.exec(DDL);
+    ownConn.exec(`
+      INSERT INTO accounts (id, name, type) VALUES (1, 'Checking', 'checking');
+      INSERT INTO category_groups (id, name, sort, hidden) VALUES (10, 'Spending', 0, 0);
+      INSERT INTO categories (id, group_id, name, sort) VALUES (${GROCERIES}, 10, 'Groceries', 0);
+      INSERT INTO transactions (account_id, date, category_id, amount) VALUES
+        (1, '2025-01-05', NULL, 500000),
+        (1, '2025-01-10', ${GROCERIES}, -8000);
+      INSERT INTO assignments (month, category_id, amount) VALUES ('2025-01', ${GROCERIES}, 20000);
+    `);
+  });
+
+  afterEach(() => {
+    ownConn.close();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("picks up a write from a different connection without an explicit invalidate()", () => {
+    const store = new SnapshotStore(
+      () => loadBudgetData(drizzle(ownConn, { schema })),
+      () => ownConn.pragma("data_version", { simple: true }) as number
+    );
+
+    const before = store.getSnapshot("2025-01");
+    expect(before.categories.get(GROCERIES)?.available).toBe(12000); // 20000 - 8000
+
+    // A second process opens its own connection to the same file and
+    // commits a write — the store's own connection never touched it, so
+    // this exercises exactly the "other process" scenario.
+    const otherConn = new Database(dbPath);
+    otherConn.prepare("UPDATE assignments SET amount = amount + ? WHERE month = ? AND category_id = ?").run(
+      10000,
+      "2025-01",
+      GROCERIES
+    );
+    otherConn.close();
+
+    // No store.invalidate() call — the data_version check must catch it.
+    const after = store.getSnapshot("2025-01");
+    expect(after).not.toBe(before);
+    expect(after.categories.get(GROCERIES)?.available).toBe(22000); // 30000 - 8000
+
+    const fresh = new SnapshotStore(() => loadBudgetData(drizzle(ownConn, { schema }))).getSnapshot("2025-01");
+    expect(normalize(after)).toEqual(normalize(fresh));
+  });
+
+  it("does not thrash the cache when nothing external has changed", () => {
+    const store = new SnapshotStore(
+      () => loadBudgetData(drizzle(ownConn, { schema })),
+      () => ownConn.pragma("data_version", { simple: true }) as number
+    );
+
+    const first = store.getSnapshot("2025-01");
+    const second = store.getSnapshot("2025-01");
+    expect(second).toBe(first);
   });
 });

@@ -5,7 +5,9 @@
  * caches them so a request never rewalks the full history. Every month snapshot
  * is memoized; the walk continues from the furthest month already computed.
  * Any write to transactions/assignments/categories must call
- * `invalidateBudgetCache()` to drop the cache.
+ * `invalidateBudgetCache()` to drop the cache. Writes from another process
+ * (e.g. a migration script) are detected automatically via SQLite's
+ * `data_version` pragma — see `SnapshotStore`.
  */
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
@@ -24,7 +26,7 @@ import {
 import { computeImportHash, resolveCategoryName, type ParsedImportRow } from "./csv-import";
 import { formatMoney } from "./currency";
 import { fetchYahooQuote, fxSymbol, isStale, toBudgetMinorUnits } from "./prices";
-import { db } from "@/db";
+import { db, sqlite } from "@/db";
 import * as schema from "@/db/schema";
 
 type DB = BetterSQLite3Database<typeof schema>;
@@ -210,9 +212,17 @@ const ZERO_SNAPSHOT: MonthSnapshot = {
 /**
  * Incremental snapshot cache. `getSnapshot(M)` returns the memoized month or
  * walks forward from the furthest computed month, caching each step.
+ *
+ * `getDataVersion` (defaults to a no-op that never changes) lets callers wire
+ * in SQLite's `PRAGMA data_version`, which changes only when a *different*
+ * connection commits a write — never for writes on this same connection,
+ * since those already call `invalidate()` explicitly. This is how a stale
+ * cache from another process (e.g. `pnpm migrate:ynab` running against the
+ * same DB file while the server is up) gets picked up without a restart.
  */
 export class SnapshotStore {
   private data: BudgetData | null = null;
+  private dataVersion: number | null = null;
   private snapshots = new Map<string, MonthSnapshot>();
   private cursor: Cursor = {
     month: null,
@@ -220,15 +230,25 @@ export class SnapshotStore {
     cumulativeFunds: 0,
   };
 
-  constructor(private loader: () => BudgetData) {}
+  constructor(
+    private loader: () => BudgetData,
+    private getDataVersion: () => number = () => 0
+  ) {}
 
   getData(): BudgetData {
-    if (!this.data) this.data = this.loader();
+    if (this.data && this.getDataVersion() !== this.dataVersion) {
+      this.invalidate();
+    }
+    if (!this.data) {
+      this.dataVersion = this.getDataVersion();
+      this.data = this.loader();
+    }
     return this.data;
   }
 
   invalidate(): void {
     this.data = null;
+    this.dataVersion = null;
     this.snapshots = new Map();
     this.cursor = { month: null, prevAvailable: new Map(), cumulativeFunds: 0 };
   }
@@ -270,8 +290,14 @@ export class SnapshotStore {
   }
 }
 
-// App-wide singleton backed by the real database.
-const store = new SnapshotStore(() => loadBudgetData(db));
+// App-wide singleton backed by the real database. `data_version` detects
+// writes committed by other processes against the same DB file (e.g. a
+// migration script run alongside `pnpm dev`) so the cache self-invalidates
+// instead of serving stale data until the server restarts.
+const store = new SnapshotStore(
+  () => loadBudgetData(db),
+  () => sqlite.pragma("data_version", { simple: true }) as number
+);
 
 export function invalidateBudgetCache(): void {
   store.invalidate();
