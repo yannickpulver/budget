@@ -103,6 +103,83 @@ export function computeCategoryActivity(
   return activity;
 }
 
+/** A transaction plus the display fields needed to explain an activity number. */
+export interface ActivityTxnInput extends TxnInput {
+  id: number;
+  date: string;
+  payee: string;
+}
+
+/** One line item contributing to a category's activity total. */
+export interface ActivityEntry {
+  id: number;
+  date: string;
+  payee: string;
+  amount: number;
+}
+
+/**
+ * Same branching as `computeCategoryActivity`, but returns the underlying
+ * transactions/feed entries behind each category's number instead of just the
+ * sum — powers the Activity-cell tooltip. Mirrors the other function exactly
+ * so each category's entries always sum to its `computeCategoryActivity`
+ * total, including the credit-card payment-category feed (categorized spend
+ * on the card, and payment transfers that reduce it).
+ */
+export function computeCategoryActivityEntries(
+  transactions: ActivityTxnInput[],
+  accounts: Map<number, AccountInfo>,
+  accountNames: Map<number, string>
+): Map<number, ActivityEntry[]> {
+  const entries = new Map<number, ActivityEntry[]>();
+  const push = (categoryId: number, entry: ActivityEntry) => {
+    const list = entries.get(categoryId);
+    if (list) list.push(entry);
+    else entries.set(categoryId, [entry]);
+  };
+
+  for (const txn of transactions) {
+    const account = accounts.get(txn.accountId);
+    if (!account || account.type === "tracking") continue;
+
+    if (txn.categoryId == null) {
+      if (
+        account.type === "credit" &&
+        account.paymentCategoryId != null &&
+        txn.transferAccountId != null
+      ) {
+        const other = accounts.get(txn.transferAccountId);
+        if (other && other.type !== "tracking") {
+          push(account.paymentCategoryId, {
+            id: txn.id,
+            date: txn.date,
+            payee: `Payment: ${accountNames.get(txn.transferAccountId) ?? "account"}`,
+            amount: -txn.amount,
+          });
+        }
+      }
+      continue;
+    }
+
+    push(txn.categoryId, { id: txn.id, date: txn.date, payee: txn.payee, amount: txn.amount });
+
+    if (
+      account.type === "credit" &&
+      account.paymentCategoryId != null &&
+      account.paymentCategoryId !== txn.categoryId
+    ) {
+      push(account.paymentCategoryId, {
+        id: txn.id,
+        date: txn.date,
+        payee: txn.payee,
+        amount: -txn.amount,
+      });
+    }
+  }
+
+  return entries;
+}
+
 /** Net movement in on-budget accounts this month (tracking accounts excluded). */
 export function computeOnBudgetFunds(
   transactions: TxnInput[],

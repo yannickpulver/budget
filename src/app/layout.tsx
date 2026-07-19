@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Sidebar } from "@/components/sidebar";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { getSidebarData } from "@/lib/queries";
 import "./globals.css";
 
@@ -32,10 +33,12 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full">
-        <div className="flex min-h-screen">
-          <Sidebar data={sidebarData} />
-          <main className="flex min-w-0 flex-1 flex-col">{children}</main>
-        </div>
+        <TooltipProvider delay={200}>
+          <div className="flex min-h-screen">
+            <Sidebar data={sidebarData} />
+            <main className="flex min-w-0 flex-1 flex-col">{children}</main>
+          </div>
+        </TooltipProvider>
       </body>
     </html>
   );

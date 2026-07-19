@@ -13,15 +13,17 @@ import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import {
+  computeCategoryActivityEntries,
   computeGoalStatus,
   computeMonthSnapshot,
   monthKey,
   nextMonthKey,
   type AccountInfo,
   type AccountType,
+  type ActivityEntry,
+  type ActivityTxnInput,
   type GoalStatus,
   type MonthSnapshot,
-  type TxnInput,
 } from "./budget-math";
 import { computeImportHash, resolveCategoryName, type ParsedImportRow } from "./csv-import";
 import { formatMoney } from "./currency";
@@ -71,11 +73,13 @@ const MONTH_RE = /^\d{4}-\d{2}$/;
 
 export interface BudgetData {
   accounts: Map<number, AccountInfo>;
+  /** Account id -> name, for display-only uses (e.g. "Payment: <account>" activity labels). */
+  accountNames: Map<number, string>;
   groups: GroupMeta[];
   categories: CategoryMeta[];
   categoryIds: number[];
   assignmentsByMonth: Map<string, Map<number, number>>;
-  txnsByMonth: Map<string, TxnInput[]>;
+  txnsByMonth: Map<string, ActivityTxnInput[]>;
   earliestMonth: string | null;
   currency: string;
   rtaAdjustment: RtaAdjustment | null;
@@ -86,6 +90,7 @@ export function loadBudgetData(dbi: DB): BudgetData {
   const accountRows = dbi
     .select({
       id: schema.accounts.id,
+      name: schema.accounts.name,
       type: schema.accounts.type,
       paymentCategoryId: schema.accounts.paymentCategoryId,
     })
@@ -98,6 +103,7 @@ export function loadBudgetData(dbi: DB): BudgetData {
       { id: a.id, type: a.type, paymentCategoryId: a.paymentCategoryId ?? null },
     ])
   );
+  const accountNames = new Map<number, string>(accountRows.map((a) => [a.id, a.name]));
 
   const groups = dbi
     .select({
@@ -131,11 +137,13 @@ export function loadBudgetData(dbi: DB): BudgetData {
     monthMap.set(row.categoryId, row.amount);
   }
 
-  const txnsByMonth = new Map<string, TxnInput[]>();
+  const txnsByMonth = new Map<string, ActivityTxnInput[]>();
   let earliestMonth: string | null = null;
   const txnRows = dbi
     .select({
+      id: schema.transactions.id,
       date: schema.transactions.date,
+      payee: schema.transactions.payee,
       accountId: schema.transactions.accountId,
       categoryId: schema.transactions.categoryId,
       amount: schema.transactions.amount,
@@ -152,6 +160,9 @@ export function loadBudgetData(dbi: DB): BudgetData {
       txnsByMonth.set(month, list);
     }
     list.push({
+      id: row.id,
+      date: row.date,
+      payee: row.payee,
       accountId: row.accountId,
       categoryId: row.categoryId ?? null,
       amount: row.amount,
@@ -168,6 +179,7 @@ export function loadBudgetData(dbi: DB): BudgetData {
 
   return {
     accounts,
+    accountNames,
     groups,
     categories,
     categoryIds: categories.map((c) => c.id),
@@ -311,6 +323,8 @@ export interface CategoryView {
   available: number;
   monthlyTarget: number | null;
   goal: GoalStatus | null;
+  /** Transactions (and, for credit-card payment categories, feed entries) behind `activity` this month — sums to it. */
+  activityTransactions: ActivityEntry[];
 }
 
 export interface GroupView {
@@ -363,6 +377,12 @@ export function getBudgetView(month: string): BudgetView {
     else categoriesByGroup.set(category.groupId, [category]);
   }
 
+  const activityEntriesByCategory = computeCategoryActivityEntries(
+    data.txnsByMonth.get(month) ?? [],
+    data.accounts,
+    data.accountNames
+  );
+
   let totalUnderfunded = 0;
   const groups: GroupView[] = [...data.groups]
     .sort((a, b) => a.sort - b.sort)
@@ -379,6 +399,9 @@ export function getBudgetView(month: string): BudgetView {
             };
           const goal = computeGoalStatus(category.monthlyTarget, cell.assigned);
           if (goal && !goal.met) totalUnderfunded += goal.remaining;
+          const activityTransactions = [...(activityEntriesByCategory.get(category.id) ?? [])].sort(
+            (a, b) => a.date.localeCompare(b.date) || a.id - b.id
+          );
           return {
             id: category.id,
             name: category.name,
@@ -387,6 +410,7 @@ export function getBudgetView(month: string): BudgetView {
             available: cell.available,
             monthlyTarget: category.monthlyTarget,
             goal,
+            activityTransactions,
           };
         });
       return { id: group.id, name: group.name, categories: cats };
