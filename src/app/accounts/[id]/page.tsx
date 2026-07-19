@@ -26,7 +26,7 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { id: idParam } = await params;
   const detail = Number.isInteger(Number(idParam)) ? getAccountDetail(Number(idParam), db) : null;
-  return { title: detail ? `${detail.name} · newbudget` : "newbudget" };
+  return { title: detail ? `${detail.name} · budget` : "budget" };
 }
 
 export default async function AccountPage({

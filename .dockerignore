@@ -4,7 +4,7 @@ out
 build
 coverage
 
-# newbudget: never ship local/private data into an image
+# budget: never ship local/private data into an image
 data
 plan
 *.db

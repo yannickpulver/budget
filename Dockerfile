@@ -27,21 +27,21 @@ ENV HOSTNAME=0.0.0.0
 ENV DATABASE_PATH=/data/budget.db
 
 RUN addgroup --system --gid 1001 nodejs \
-  && adduser --system --uid 1001 newbudget \
+  && adduser --system --uid 1001 budget \
   && mkdir -p /data \
-  && chown newbudget:nodejs /data
+  && chown budget:nodejs /data
 
 # Next.js standalone output: a self-contained server with only the traced
 # production dependencies (including better-sqlite3, kept external — see
 # next.config.ts — and copied in as a native addon).
-COPY --from=builder --chown=newbudget:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=newbudget:nodejs /app/.next/static ./.next/static
-COPY --from=builder --chown=newbudget:nodejs /app/public ./public
+COPY --from=builder --chown=budget:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=budget:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=budget:nodejs /app/public ./public
 # Raw SQL migrations — not traced by Next's build, applied at startup by
 # src/db/index.ts to bootstrap a brand-new /data/budget.db.
-COPY --from=builder --chown=newbudget:nodejs /app/drizzle ./drizzle
+COPY --from=builder --chown=budget:nodejs /app/drizzle ./drizzle
 
-USER newbudget
+USER budget
 
 EXPOSE 3000
 VOLUME ["/data"]

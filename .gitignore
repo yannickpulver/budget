@@ -40,6 +40,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# newbudget: local data & private fixtures
+# budget: local data & private fixtures
 /data/
 /plan/

@@ -1,4 +1,4 @@
-# newbudget — self-hosted YNAB replacement
+# budget — self-hosted YNAB replacement
 
 ## Context
 
@@ -8,7 +8,7 @@ An **open-source, self-hostable, private YNAB alternative** — built for anyone
 
 ## Decisions (made with user)
 
-- **Fully fresh rewrite** in `newbudget/`. Nothing copied from the old repo.
+- **Fully fresh rewrite** in `budget/`. Nothing copied from the old repo.
 - **Investments**: holdings (symbol, quantity) per tracking account with **auto price fetch** (Yahoo Finance unofficial quote API, cached in DB).
 - **No auth** — network-level protection assumed (localhost/Tailscale/reverse proxy).
 - **Light mode** UI, shadcn/ui, no AI-slop styling.

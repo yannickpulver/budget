@@ -1,4 +1,4 @@
-# newbudget
+# budget
 
 An open-source, self-hosted envelope budgeting app — a private alternative to
 YNAB you run yourself. Every unit of currency gets assigned to a category
@@ -38,8 +38,8 @@ here._
 ### Docker (recommended)
 
 ```bash
-git clone https://github.com/<you>/newbudget.git
-cd newbudget
+git clone https://github.com/<you>/budget.git
+cd budget
 docker compose up -d
 ```
 
@@ -82,7 +82,7 @@ about the starter set is special or hardcoded into the budget logic.
 
 The migration is a one-time CLI script — it wipes and reimports the local
 database from two CSV files you export from YNAB, so it's meant to be run
-once, before you start using newbudget day to day. Because it's destructive,
+once, before you start using budget day to day. Because it's destructive,
 it refuses to run if the database already has transactions in it unless you
 pass `--force`.
 
