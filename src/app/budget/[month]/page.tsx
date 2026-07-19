@@ -14,6 +14,7 @@ import {
   type RtaAdjustment,
 } from "@/lib/queries";
 import { cn } from "@/lib/utils";
+import { ActivityCell } from "./activity-cell";
 import { AssignCell } from "./assign-cell";
 import { GoalControl } from "./goal-control";
 
@@ -293,9 +294,7 @@ function Row({ category, month }: { category: CategoryView; month: string }) {
         />
       </div>
       <AssignCell month={month} categoryId={category.id} assigned={category.assigned} />
-      <div className="pr-2 text-right text-sm text-muted-foreground tabular-nums">
-        {formatMoney(category.activity)}
-      </div>
+      <ActivityCell activity={category.activity} transactions={category.activityTransactions} />
       <div className="flex justify-end pr-1">
         <span
           className={cn(
