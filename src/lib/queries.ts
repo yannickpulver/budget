@@ -10,7 +10,7 @@
  * `data_version` pragma — see `SnapshotStore`.
  */
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import {
   computeCategoryActivityEntries,
@@ -813,6 +813,23 @@ export function getAccountRegister(
     page,
     pageSize: REGISTER_PAGE_SIZE,
   };
+}
+
+/**
+ * Distinct payees across all non-transfer transactions, ranked most-used then
+ * most-recent first, for the register's payee autocomplete. Capped so the whole
+ * list can ship to the client and be filtered there as the user types.
+ */
+export function getPayeeSuggestions(dbi: DB = db): string[] {
+  return dbi
+    .select({ payee: schema.transactions.payee })
+    .from(schema.transactions)
+    .where(and(isNull(schema.transactions.transferAccountId), ne(schema.transactions.payee, "")))
+    .groupBy(schema.transactions.payee)
+    .orderBy(desc(sql`count(*)`), desc(sql`max(${schema.transactions.date})`))
+    .limit(300)
+    .all()
+    .map((r) => r.payee);
 }
 
 export interface CategoryOption {
