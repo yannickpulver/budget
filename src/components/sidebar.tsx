@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { ChevronRight, PiggyBank, Tags, Wallet } from "lucide-react";
 import { useState } from "react";
 import { AddAccountDialog } from "@/app/accounts/add-account-dialog";
+import { AccountIcon } from "@/components/account-icon";
 import { formatMoney } from "@/lib/currency";
 import type { AccountBalance, SidebarData } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -174,7 +175,10 @@ function AccountRow({ account, active }: { account: AccountBalance; active: bool
         active ? "bg-muted font-medium text-foreground" : "text-foreground/80 hover:bg-muted hover:text-foreground"
       )}
     >
-      <span className="truncate">{account.name}</span>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <AccountIcon type={account.type} icon={account.icon} />
+        <span className="truncate">{account.name}</span>
+      </span>
       <span className={cn("shrink-0 tabular-nums", balanceClass(account.balance))}>
         {formatMoney(account.balance)}
       </span>

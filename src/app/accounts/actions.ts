@@ -11,7 +11,9 @@ import {
   deleteTransaction as deleteTransactionRow,
   getAccountDetail,
   renameAccount as renameAccountRow,
+  setAccountBalance,
   setAccountClosed,
+  setAccountIcon,
   setAccountType,
   toggleTransactionCleared,
   updateTransaction as updateTransactionRow,
@@ -82,6 +84,26 @@ export async function reopenAccountAction(id: number): Promise<ActionResult> {
  */
 export async function updateAccountTypeAction(id: number, type: AccountType): Promise<ActionResult> {
   setAccountType(db, id, type);
+  refresh(id);
+  return { ok: true };
+}
+
+/** `icon` is free-text (typically 1-2 emoji chars); `null` resets to the type's default icon. */
+export async function updateAccountIconAction(id: number, icon: string | null): Promise<ActionResult> {
+  setAccountIcon(db, id, icon);
+  refresh(id);
+  return { ok: true };
+}
+
+/**
+ * Books an adjustment transaction so the account balance matches a
+ * user-typed target — for tracking accounts whose value isn't derived from
+ * priced holdings (see `setAccountBalance` in queries.ts).
+ */
+export async function setAccountBalanceAction(id: number, targetBalance: number): Promise<ActionResult> {
+  if (!isValidNumber(targetBalance)) return { ok: false, error: "Amount is not a valid number." };
+  const result = setAccountBalance(db, id, Math.round(targetBalance));
+  if (!result.ok) return result;
   refresh(id);
   return { ok: true };
 }

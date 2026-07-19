@@ -505,6 +505,7 @@ export interface AccountBalance {
   name: string;
   type: AccountType;
   closed: boolean;
+  icon: string | null;
   balance: number;
 }
 
@@ -526,6 +527,7 @@ export function listAccountBalances(dbi: DB = db): AccountBalance[] {
       name: schema.accounts.name,
       type: schema.accounts.type,
       closed: schema.accounts.closed,
+      icon: schema.accounts.icon,
       sort: schema.accounts.sort,
     })
     .from(schema.accounts)
@@ -538,6 +540,7 @@ export function listAccountBalances(dbi: DB = db): AccountBalance[] {
       name: a.name,
       type: a.type,
       closed: a.closed,
+      icon: a.icon,
       balance: balanceById.get(a.id) ?? 0,
     }));
 }
@@ -591,6 +594,7 @@ export interface AccountDetail {
   name: string;
   type: AccountType;
   closed: boolean;
+  icon: string | null;
   currency: string;
   balance: number;
   clearedBalance: number;
@@ -625,6 +629,7 @@ export function getAccountDetail(id: number, dbi: DB = db): AccountDetail | null
     name: account.name,
     type: account.type,
     closed: account.closed,
+    icon: account.icon,
     currency: getCurrency(dbi),
     balance,
     clearedBalance,
@@ -1072,6 +1077,11 @@ export function setAccountClosed(dbi: DB, id: number, closed: boolean): void {
  */
 export function setAccountType(dbi: DB, id: number, type: AccountType): void {
   dbi.update(schema.accounts).set({ type }).where(eq(schema.accounts.id, id)).run();
+}
+
+/** Sets or clears (`null`) the emoji override shown instead of the type's default icon. */
+export function setAccountIcon(dbi: DB, id: number, icon: string | null): void {
+  dbi.update(schema.accounts).set({ icon }).where(eq(schema.accounts.id, id)).run();
 }
 
 export function deleteAccount(dbi: DB, id: number): void {
@@ -1628,6 +1638,35 @@ export function syncHoldingsBalance(dbi: DB, accountId: number): SyncBalanceResu
     payee: "Balance Adjustment",
     categoryId: null,
     memo: "Synced to holdings value",
+    amount: delta,
+    cleared: true,
+  });
+
+  return { ok: true, delta };
+}
+
+export type SetBalanceResult = { ok: true; delta: number } | { ok: false; error: string };
+
+/**
+ * Book an uncategorized "Balance Adjustment" transaction so the account
+ * balance matches a user-typed target — the manual counterpart to
+ * `syncHoldingsBalance` for tracking accounts whose funds aren't
+ * exchange-listed (e.g. a pillar-3a account), where the user reads the
+ * current value off the provider's app instead of it being priced here.
+ */
+export function setAccountBalance(dbi: DB, accountId: number, targetRappen: number): SetBalanceResult {
+  const detail = getAccountDetail(accountId, dbi);
+  if (!detail) return { ok: false, error: "Account not found." };
+
+  const delta = computeSyncDelta(detail.balance, targetRappen);
+  if (delta == null) return { ok: false, error: "Already at that balance." };
+
+  createTransaction(dbi, {
+    accountId,
+    date: new Date().toISOString().slice(0, 10),
+    payee: "Balance Adjustment",
+    categoryId: null,
+    memo: "Manual balance update",
     amount: delta,
     cleared: true,
   });

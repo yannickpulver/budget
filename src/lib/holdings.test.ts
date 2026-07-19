@@ -9,6 +9,7 @@ import {
   getAccountDetail,
   getHoldingsView,
   refreshHoldingPrices,
+  setAccountBalance,
   syncHoldingsBalance,
   updateHolding,
 } from "./queries";
@@ -33,7 +34,8 @@ CREATE TABLE accounts (
   type TEXT NOT NULL,
   closed INTEGER NOT NULL DEFAULT 0,
   sort INTEGER NOT NULL DEFAULT 0,
-  payment_category_id INTEGER
+  payment_category_id INTEGER,
+  icon TEXT
 );
 CREATE TABLE transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -293,5 +295,58 @@ describe("syncHoldingsBalance", () => {
     const dbi = makeDb();
     const result = syncHoldingsBalance(dbi, TRACKING_ACCOUNT);
     expect(result).toEqual({ ok: false, error: "No holdings to sync." });
+  });
+});
+
+describe("setAccountBalance", () => {
+  it("books a positive adjustment when the target exceeds the current balance", () => {
+    const dbi = makeDb();
+    // Account currently has no transactions -> balance 0.
+    const result = setAccountBalance(dbi, TRACKING_ACCOUNT, 50_000);
+    expect(result).toEqual({ ok: true, delta: 50_000 });
+
+    const detail = getAccountDetail(TRACKING_ACCOUNT, dbi);
+    expect(detail?.balance).toBe(50_000);
+
+    const txn = sqlite.prepare("SELECT * FROM transactions WHERE account_id = ?").get(TRACKING_ACCOUNT) as {
+      payee: string;
+      memo: string;
+      amount: number;
+      category_id: number | null;
+      cleared: number;
+    };
+    expect(txn.payee).toBe("Balance Adjustment");
+    expect(txn.memo).toBe("Manual balance update");
+    expect(txn.amount).toBe(50_000);
+    expect(txn.category_id).toBeNull();
+    expect(txn.cleared).toBe(1);
+  });
+
+  it("books a negative adjustment when the target is below the current balance", () => {
+    const dbi = makeDb();
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES (${TRACKING_ACCOUNT}, '2026-01-01', 'Deposit', 100000, 1)`
+    );
+    const result = setAccountBalance(dbi, TRACKING_ACCOUNT, 40_000);
+    expect(result).toEqual({ ok: true, delta: -60_000 });
+    expect(getAccountDetail(TRACKING_ACCOUNT, dbi)?.balance).toBe(40_000);
+  });
+
+  it("is a no-op when the target already equals the current balance", () => {
+    const dbi = makeDb();
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES (${TRACKING_ACCOUNT}, '2026-01-01', 'Deposit', 50000, 1)`
+    );
+    const result = setAccountBalance(dbi, TRACKING_ACCOUNT, 50_000);
+    expect(result).toEqual({ ok: false, error: "Already at that balance." });
+    expect(
+      sqlite.prepare("SELECT count(*) as c FROM transactions WHERE account_id = ?").get(TRACKING_ACCOUNT)
+    ).toEqual({ c: 1 });
+  });
+
+  it("returns an error for a missing account", () => {
+    const dbi = makeDb();
+    const result = setAccountBalance(dbi, 999, 1000);
+    expect(result).toEqual({ ok: false, error: "Account not found." });
   });
 });

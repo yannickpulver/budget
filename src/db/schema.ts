@@ -19,6 +19,9 @@ export const accounts = sqliteTable("accounts", {
   paymentCategoryId: integer("payment_category_id").references(
     (): typeof categories.id => categories.id
   ),
+  // Optional emoji override (1-2 chars, free text) shown instead of the
+  // type's default lucide icon. Null = use the type default.
+  icon: text("icon"),
 });
 
 export const categoryGroups = sqliteTable("category_groups", {
