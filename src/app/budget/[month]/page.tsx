@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ActivityCell } from "./activity-cell";
 import { AssignCell } from "./assign-cell";
+import { AvailablePill } from "./available-pill";
 import { GoalControl } from "./goal-control";
 
 const MONTH_RE = /^(\d{4})-(\d{2})$/;
@@ -46,12 +47,6 @@ const MONTH_NAMES = [
 function monthLabel(month: string): string {
   const [year, mon] = month.split("-").map(Number);
   return `${MONTH_NAMES[mon - 1]} ${year}`;
-}
-
-function availableClass(value: number): string {
-  if (value > 0) return "bg-emerald-100 text-emerald-700";
-  if (value < 0) return "bg-red-100 text-red-700";
-  return "bg-muted text-muted-foreground";
 }
 
 export default async function BudgetPage({
@@ -97,7 +92,13 @@ export default async function BudgetPage({
 
             <div className="divide-y divide-border rounded-lg border border-border">
               {view.groups.map((group) => (
-                <Group key={group.id} group={group} month={month} currency={view.currency} />
+                <Group
+                  key={group.id}
+                  group={group}
+                  allGroups={view.groups}
+                  month={month}
+                  currency={view.currency}
+                />
               ))}
             </div>
           </>
@@ -236,7 +237,17 @@ function NavArrow({
   );
 }
 
-function Group({ group, month, currency }: { group: GroupView; month: string; currency: string }) {
+function Group({
+  group,
+  allGroups,
+  month,
+  currency,
+}: {
+  group: GroupView;
+  allGroups: GroupView[];
+  month: string;
+  currency: string;
+}) {
   const totals = group.categories.reduce(
     (acc, c) => ({
       assigned: acc.assigned + c.assigned,
@@ -271,14 +282,30 @@ function Group({ group, month, currency }: { group: GroupView; month: string; cu
 
       <div className="divide-y divide-border/60">
         {group.categories.map((category) => (
-          <Row key={category.id} category={category} month={month} currency={currency} />
+          <Row
+            key={category.id}
+            category={category}
+            allGroups={allGroups}
+            month={month}
+            currency={currency}
+          />
         ))}
       </div>
     </details>
   );
 }
 
-function Row({ category, month, currency }: { category: CategoryView; month: string; currency: string }) {
+function Row({
+  category,
+  allGroups,
+  month,
+  currency,
+}: {
+  category: CategoryView;
+  allGroups: GroupView[];
+  month: string;
+  currency: string;
+}) {
   const underfunded = category.goal != null && !category.goal.met;
 
   return (
@@ -306,14 +333,12 @@ function Row({ category, month, currency }: { category: CategoryView; month: str
       <AssignCell month={month} categoryId={category.id} assigned={category.assigned} />
       <ActivityCell activity={category.activity} transactions={category.activityTransactions} />
       <div className="flex justify-end pr-1">
-        <span
-          className={cn(
-            "rounded-full px-2 py-0.5 text-right text-sm tabular-nums",
-            availableClass(category.available)
-          )}
-        >
-          {formatMoney(category.available)}
-        </span>
+        <AvailablePill
+          month={month}
+          categoryId={category.id}
+          available={category.available}
+          groups={allGroups}
+        />
       </div>
     </div>
   );

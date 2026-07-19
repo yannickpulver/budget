@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
-import { invalidateBudgetCache } from "@/lib/queries";
+import { adjustAssignment, invalidateBudgetCache } from "@/lib/queries";
 import { isValidNumber } from "@/lib/validation";
 
 const BUDGET_ROUTE = "/budget/[month]";
@@ -47,6 +47,30 @@ export async function setMonthlyTarget(
     .set({ monthlyTarget: amount == null ? null : Math.round(amount) })
     .where(eq(schema.categories.id, categoryId))
     .run();
+  refresh();
+}
+
+/**
+ * Move money between two sides of a month's budget — either side may be
+ * `null` for Ready to Assign. Both adjustments happen in one transaction:
+ * the source's assigned amount goes down by `amount`, the destination's
+ * goes up by it. A `null` side is skipped since RTA isn't a stored row —
+ * reducing (or growing) the other side's assignment alone moves the money
+ * to (or from) it implicitly.
+ */
+export async function moveMoney(
+  month: string,
+  fromCategoryId: number | null,
+  toCategoryId: number | null,
+  amount: number
+): Promise<void> {
+  if (!isValidNumber(amount) || amount <= 0) return;
+  if (fromCategoryId === toCategoryId) return;
+  const rounded = Math.round(amount);
+  db.transaction((tx) => {
+    if (fromCategoryId != null) adjustAssignment(tx, month, fromCategoryId, -rounded);
+    if (toCategoryId != null) adjustAssignment(tx, month, toCategoryId, rounded);
+  });
   refresh();
 }
 
