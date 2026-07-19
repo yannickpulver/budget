@@ -482,6 +482,50 @@ export function getBudgetView(month: string): BudgetView {
 }
 
 /**
+ * Budget page filter chips ("Needs funding" / "Negative"). Pure over
+ * `GroupView[]` so the page can filter server-side without recomputing the
+ * snapshot, and so the matching logic is unit-testable without a database.
+ */
+export const BUDGET_FILTER_KEYS = ["underfunded", "negative"] as const;
+export type BudgetFilterKey = (typeof BUDGET_FILTER_KEYS)[number];
+
+/** "Needs funding" = same condition as the row's underfunded amber state. */
+export function categoryMatchesFilter(category: CategoryView, filter: BudgetFilterKey): boolean {
+  switch (filter) {
+    case "underfunded":
+      return category.goal != null && !category.goal.met;
+    case "negative":
+      return category.available < 0;
+  }
+}
+
+/** Count of categories (across all groups) matching `filter` — for the chip's count badge. */
+export function countBudgetFilterMatches(groups: GroupView[], filter: BudgetFilterKey): number {
+  let count = 0;
+  for (const group of groups) {
+    for (const category of group.categories) {
+      if (categoryMatchesFilter(category, filter)) count++;
+    }
+  }
+  return count;
+}
+
+/**
+ * Keeps only categories matching at least one of `filters` (union), dropping
+ * groups left with none. Returns `groups` unchanged when `filters` is empty
+ * so group totals (derived from `categories` by the caller) stay exact.
+ */
+export function filterGroupViews(groups: GroupView[], filters: BudgetFilterKey[]): GroupView[] {
+  if (filters.length === 0) return groups;
+  return groups
+    .map((group) => ({
+      ...group,
+      categories: group.categories.filter((c) => filters.some((f) => categoryMatchesFilter(c, f))),
+    }))
+    .filter((group) => group.categories.length > 0);
+}
+
+/**
  * The adjustment that snaps Ready to Assign at `month` from its current value
  * to `targetMinor`. `currentRta` is the app's RTA for that month *with any
  * existing adjustment already applied*, and `appliedAdjustment` is how much of

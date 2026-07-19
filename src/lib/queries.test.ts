@@ -6,12 +6,17 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as schema from "@/db/schema";
 import {
+  categoryMatchesFilter,
   computeAlignmentAdjustment,
+  countBudgetFilterMatches,
+  filterGroupViews,
   getSidebarData,
   listAccounts,
   loadBudgetData,
   reorderAccounts,
   SnapshotStore,
+  type CategoryView,
+  type GroupView,
 } from "./queries";
 import type { MonthSnapshot } from "./budget-math";
 
@@ -340,5 +345,92 @@ describe("reorderAccounts", () => {
     reorderAccounts(dbi, [2, 1]);
 
     expect(getSidebarData(dbi).budget.map((a) => a.id)).toEqual([2, 1]);
+  });
+});
+
+describe("budget filter chips", () => {
+  function cat(overrides: Partial<CategoryView> & { id: number; name: string }): CategoryView {
+    return {
+      assigned: 0,
+      activity: 0,
+      available: 0,
+      monthlyTarget: null,
+      goal: null,
+      activityTransactions: [],
+      avgSpend: null,
+      ...overrides,
+    };
+  }
+
+  const funded = cat({ id: 1, name: "Funded", monthlyTarget: 10000, assigned: 10000, goal: { met: true, remaining: 0 } });
+  const underfunded = cat({
+    id: 2,
+    name: "Underfunded",
+    monthlyTarget: 10000,
+    assigned: 4000,
+    goal: { met: false, remaining: 6000 },
+  });
+  const negative = cat({ id: 3, name: "Negative", available: -500 });
+  const both = cat({
+    id: 4,
+    name: "Both",
+    monthlyTarget: 5000,
+    assigned: 0,
+    goal: { met: false, remaining: 5000 },
+    available: -200,
+  });
+  const plain = cat({ id: 5, name: "Plain" });
+
+  const groups: GroupView[] = [
+    { id: 100, name: "Spending", categories: [funded, underfunded, negative] },
+    { id: 200, name: "Saving", categories: [both, plain] },
+  ];
+
+  describe("categoryMatchesFilter", () => {
+    it("'underfunded' matches a category with an unmet monthly target", () => {
+      expect(categoryMatchesFilter(underfunded, "underfunded")).toBe(true);
+      expect(categoryMatchesFilter(funded, "underfunded")).toBe(false);
+      expect(categoryMatchesFilter(plain, "underfunded")).toBe(false);
+    });
+
+    it("'negative' matches a category with available < 0", () => {
+      expect(categoryMatchesFilter(negative, "negative")).toBe(true);
+      expect(categoryMatchesFilter(funded, "negative")).toBe(false);
+    });
+  });
+
+  describe("countBudgetFilterMatches", () => {
+    it("counts matches across all groups", () => {
+      expect(countBudgetFilterMatches(groups, "underfunded")).toBe(2); // underfunded, both
+      expect(countBudgetFilterMatches(groups, "negative")).toBe(2); // negative, both
+    });
+  });
+
+  describe("filterGroupViews", () => {
+    it("returns groups unchanged when no filters are active", () => {
+      expect(filterGroupViews(groups, [])).toBe(groups);
+    });
+
+    it("keeps only matching categories and drops now-empty groups", () => {
+      const result = filterGroupViews(groups, ["negative"]);
+      expect(result.map((g) => ({ id: g.id, categoryIds: g.categories.map((c) => c.id) }))).toEqual([
+        { id: 100, categoryIds: [3] },
+        { id: 200, categoryIds: [4] },
+      ]);
+    });
+
+    it("unions multiple active filters", () => {
+      const result = filterGroupViews(groups, ["underfunded", "negative"]);
+      const ids = result.flatMap((g) => g.categories.map((c) => c.id));
+      expect(ids.sort()).toEqual([2, 3, 4]);
+    });
+
+    it("drops a group entirely when none of its categories match", () => {
+      const result = filterGroupViews(
+        [{ id: 999, name: "All funded", categories: [funded] }],
+        ["underfunded"]
+      );
+      expect(result).toEqual([]);
+    });
   });
 });
