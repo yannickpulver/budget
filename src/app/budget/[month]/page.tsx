@@ -97,7 +97,7 @@ export default async function BudgetPage({
 
             <div className="divide-y divide-border rounded-lg border border-border">
               {view.groups.map((group) => (
-                <Group key={group.id} group={group} month={month} />
+                <Group key={group.id} group={group} month={month} currency={view.currency} />
               ))}
             </div>
           </>
@@ -236,7 +236,7 @@ function NavArrow({
   );
 }
 
-function Group({ group, month }: { group: GroupView; month: string }) {
+function Group({ group, month, currency }: { group: GroupView; month: string; currency: string }) {
   const totals = group.categories.reduce(
     (acc, c) => ({
       assigned: acc.assigned + c.assigned,
@@ -271,14 +271,14 @@ function Group({ group, month }: { group: GroupView; month: string }) {
 
       <div className="divide-y divide-border/60">
         {group.categories.map((category) => (
-          <Row key={category.id} category={category} month={month} />
+          <Row key={category.id} category={category} month={month} currency={currency} />
         ))}
       </div>
     </details>
   );
 }
 
-function Row({ category, month }: { category: CategoryView; month: string }) {
+function Row({ category, month, currency }: { category: CategoryView; month: string; currency: string }) {
   const underfunded = category.goal != null && !category.goal.met;
 
   return (
@@ -289,9 +289,9 @@ function Row({ category, month }: { category: CategoryView; month: string }) {
           {category.avgSpend != null && (
             <span
               className="shrink-0 text-xs tabular-nums text-muted-foreground/50"
-              title={`Average spent over the last 6 months: ${formatMoney(category.avgSpend)}`}
+              title={`Average spent over the last 6 months: ${formatCurrency(category.avgSpend, currency)}`}
             >
-              ø {formatMoneyWhole(category.avgSpend)}
+              ø {currency} {formatMoneyWhole(category.avgSpend)}
             </span>
           )}
         </div>
