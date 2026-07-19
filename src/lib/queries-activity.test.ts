@@ -153,3 +153,94 @@ describe("getBudgetView activityTransactions", () => {
     expect(cat.activityTransactions).toEqual([]);
   });
 });
+
+describe("getBudgetView avgSpend", () => {
+  it("averages net activity over the trailing 6 in-range months, excluding the displayed month; null when untouched", async () => {
+    const { db } = await import("@/db");
+    const { getBudgetView } = await import("./queries");
+
+    const [group] = db.insert(schema.categoryGroups).values({ name: "Spending" }).returning().all();
+    const [groceries, rent] = db
+      .insert(schema.categories)
+      .values([
+        { groupId: group.id, name: "Groceries" },
+        { groupId: group.id, name: "Rent" },
+      ])
+      .returning()
+      .all();
+    const [checking] = db.insert(schema.accounts).values({ name: "Checking", type: "checking" }).returning().all();
+
+    // Jan-Jun 2025: -1000 (CHF 10) each month in Groceries; earliestMonth = 2025-01,
+    // and the displayed month (2025-07) has a large spend that must NOT count.
+    db.insert(schema.transactions)
+      .values(
+        ["2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06"].map((month) => ({
+          accountId: checking.id,
+          date: `${month}-10`,
+          payee: "Migros",
+          categoryId: groceries.id,
+          amount: -1000,
+        }))
+      )
+      .run();
+    db.insert(schema.transactions)
+      .values({
+        accountId: checking.id,
+        date: "2025-07-05",
+        payee: "Migros",
+        categoryId: groceries.id,
+        amount: -50000,
+      })
+      .run();
+
+    const view = getBudgetView("2025-07");
+    const cats = view.groups.flatMap((g) => g.categories);
+    const groceriesView = cats.find((c) => c.id === groceries.id)!;
+    const rentView = cats.find((c) => c.id === rent.id)!;
+
+    // Mean of six -1000 months = -1000 -> magnitude 1000, unaffected by July's spend.
+    expect(groceriesView.avgSpend).toBe(1000);
+    // Never touched -> average is 0 -> hidden.
+    expect(rentView.avgSpend).toBeNull();
+  });
+
+  it("skips credit-card payment categories even when they have activity in the window", async () => {
+    const { db } = await import("@/db");
+    const { getBudgetView } = await import("./queries");
+
+    const [group] = db.insert(schema.categoryGroups).values({ name: "Spending" }).returning().all();
+    const [groceries, cardPayment] = db
+      .insert(schema.categories)
+      .values([
+        { groupId: group.id, name: "Groceries" },
+        { groupId: group.id, name: "Credit Card Payment" },
+      ])
+      .returning()
+      .all();
+    const [credit] = db
+      .insert(schema.accounts)
+      .values({ name: "Visa", type: "credit", paymentCategoryId: cardPayment.id })
+      .returning()
+      .all();
+
+    db.insert(schema.transactions)
+      .values(
+        ["2025-01", "2025-02", "2025-03"].map((month) => ({
+          accountId: credit.id,
+          date: `${month}-10`,
+          payee: "Migros",
+          categoryId: groceries.id,
+          amount: -2000,
+        }))
+      )
+      .run();
+
+    const view = getBudgetView("2025-07");
+    const cats = view.groups.flatMap((g) => g.categories);
+    const groceriesView = cats.find((c) => c.id === groceries.id)!;
+    const paymentView = cats.find((c) => c.id === cardPayment.id)!;
+
+    expect(groceriesView.avgSpend).not.toBeNull();
+    expect(paymentView.avgSpend).toBeNull();
+  });
+});

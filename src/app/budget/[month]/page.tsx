@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { ChevronDown, ChevronLeft, ChevronRight, Info, Tags, Wallet } from "lucide-react";
 import { db } from "@/db";
 import { prevMonthKey, nextMonthKey } from "@/lib/budget-math";
-import { formatCurrency, formatMoney } from "@/lib/currency";
+import { formatCurrency, formatMoney, formatMoneyWhole } from "@/lib/currency";
 import {
   currentMonth,
   getBudgetView,
@@ -284,7 +284,17 @@ function Row({ category, month }: { category: CategoryView; month: string }) {
   return (
     <div className={cn(GRID, "px-2 py-1", underfunded && "bg-amber-50")}>
       <div className="flex min-w-0 items-center justify-between gap-2 pr-2">
-        <span className="truncate text-sm">{category.name}</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-sm">{category.name}</span>
+          {category.avgSpend != null && (
+            <span
+              className="shrink-0 text-xs tabular-nums text-muted-foreground/50"
+              title={`Average spent over the last 6 months: ${formatMoney(category.avgSpend)}`}
+            >
+              ø {formatMoneyWhole(category.avgSpend)}
+            </span>
+          )}
+        </div>
         <GoalControl
           month={month}
           categoryId={category.id}

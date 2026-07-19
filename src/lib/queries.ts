@@ -18,6 +18,7 @@ import {
   computeMonthSnapshot,
   monthKey,
   nextMonthKey,
+  prevMonthKey,
   type AccountInfo,
   type AccountType,
   type ActivityEntry,
@@ -326,6 +327,14 @@ export interface CategoryView {
   goal: GoalStatus | null;
   /** Transactions (and, for credit-card payment categories, feed entries) behind `activity` this month — sums to it. */
   activityTransactions: ActivityEntry[];
+  /**
+   * Mean magnitude of net activity (minor units, always positive) over the
+   * trailing 6 full months before the displayed month, counting only months
+   * within the data range. Null when there's nothing worth showing: fewer
+   * than 6-months-of-data-in-range with zero net activity, a rounded average
+   * of 0, or a credit-card payment category (its activity is derived).
+   */
+  avgSpend: number | null;
 }
 
 export interface GroupView {
@@ -362,6 +371,45 @@ export function monthRange(start: string, end: string): string[] {
   return months;
 }
 
+const AVG_SPEND_WINDOW_MONTHS = 6;
+
+/**
+ * Builds a per-category `avgSpend` lookup for `getBudgetView`: the mean
+ * magnitude of net activity over the trailing 6 full months before `month`
+ * (excluding `month` itself), counting only months within the data range.
+ * Reuses `store`'s memoized snapshots — no new computation for months
+ * already walked to reach `month`.
+ */
+function buildAvgSpendComputer(
+  month: string,
+  data: BudgetData,
+  store: SnapshotStore
+): (categoryId: number) => number | null {
+  const paymentCategoryIds = new Set<number>();
+  for (const account of data.accounts.values()) {
+    if (account.paymentCategoryId != null) paymentCategoryIds.add(account.paymentCategoryId);
+  }
+
+  const windowSnapshots: MonthSnapshot[] = [];
+  let m = month;
+  for (let i = 0; i < AVG_SPEND_WINDOW_MONTHS; i++) {
+    m = prevMonthKey(m);
+    if (data.earliestMonth != null && m >= data.earliestMonth) {
+      windowSnapshots.push(store.getSnapshot(m));
+    }
+  }
+
+  return (categoryId: number): number | null => {
+    if (paymentCategoryIds.has(categoryId) || windowSnapshots.length === 0) return null;
+    let sum = 0;
+    for (const snapshot of windowSnapshots) {
+      sum += snapshot.categories.get(categoryId)?.activity ?? 0;
+    }
+    const magnitude = Math.round(Math.abs(sum / windowSnapshots.length));
+    return Math.round(magnitude / 100) === 0 ? null : magnitude;
+  };
+}
+
 /** Build everything the budget page renders for one month. */
 export function getBudgetView(month: string): BudgetView {
   const data = store.getData();
@@ -383,6 +431,8 @@ export function getBudgetView(month: string): BudgetView {
     data.accounts,
     data.accountNames
   );
+
+  const computeAvgSpend = buildAvgSpendComputer(month, data, store);
 
   let totalUnderfunded = 0;
   const groups: GroupView[] = [...data.groups]
@@ -412,6 +462,7 @@ export function getBudgetView(month: string): BudgetView {
             monthlyTarget: category.monthlyTarget,
             goal,
             activityTransactions,
+            avgSpend: computeAvgSpend(category.id),
           };
         });
       return { id: group.id, name: group.name, categories: cats };

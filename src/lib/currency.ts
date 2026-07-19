@@ -19,6 +19,12 @@ export function formatCurrency(minorUnits: number, currency: string): string {
   return `${currency} ${formatMoney(minorUnits)}`;
 }
 
+/** Format minor units rounded to whole currency units, Swiss grouping, no decimals — e.g. "1'235". */
+export function formatMoneyWhole(minorUnits: number): string {
+  const whole = Math.round(Math.abs(minorUnits) / 100);
+  return String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, "'");
+}
+
 /**
  * Parse user input into minor units. Accepts "120", "120.50", "1'200",
  * "1'200.50", optional leading minus and surrounding whitespace. Apostrophes
