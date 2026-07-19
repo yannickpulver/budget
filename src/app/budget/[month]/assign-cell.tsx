@@ -25,7 +25,7 @@ export function AssignCell({
 
   function commitAndClose() {
     setEditing(false);
-    const parsed = parseMoneyInput(value);
+    const parsed = value.trim() === "" ? 0 : parseMoneyInput(value);
     const next = parsed == null ? assigned : parsed;
     if (next === assigned) return;
     startTransition(() => setAssigned(month, categoryId, next));
