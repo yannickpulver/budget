@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { Check, Target } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, parseMoneyInput } from "@/lib/currency";
@@ -33,6 +33,7 @@ export function GoalControl({
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
   const [pending, startTransition] = useTransition();
+  const inputRef = useRef<HTMLInputElement>(null);
 
   function onOpenChange(next: boolean) {
     if (next) setValue(monthlyTarget == null ? "" : formatMoney(monthlyTarget));
@@ -80,12 +81,12 @@ export function GoalControl({
         >
           <Target className="size-3.5" />
         </PopoverTrigger>
-        <PopoverContent align="end" className="w-56">
+        <PopoverContent align="end" className="w-56" initialFocus={inputRef}>
           <PopoverHeader>
             <PopoverTitle>Monthly target</PopoverTitle>
           </PopoverHeader>
           <Input
-            autoFocus
+            ref={inputRef}
             inputMode="decimal"
             placeholder="0.00"
             value={value}
