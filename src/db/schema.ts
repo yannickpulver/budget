@@ -121,3 +121,21 @@ export const importBatches = sqliteTable("import_batches", {
   count: integer("count").notNull(),
   committedAt: text("committed_at").notNull(),
 });
+
+// Per-row idempotency ledger for the Swissquote statement importer. Statement
+// rows carry a bank-issued reference number (or, for the few row types that
+// don't — fees, opening/closing balances — a derived composite key); this
+// table remembers every previously-committed row's hash so re-importing a
+// statement whose period *overlaps* an earlier one (e.g. a yearly summary
+// after several monthlies) flags the already-applied rows as duplicates
+// instead of double-booking them. Complements `import_batches`, which is
+// reused for whole-statement idempotency keyed on account+period — see
+// `commitSwissquoteImport` in queries.ts.
+export const importedStatementRows = sqliteTable("imported_statement_rows", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  accountId: integer("account_id")
+    .notNull()
+    .references(() => accounts.id),
+  importHash: text("import_hash").notNull(),
+  committedAt: text("committed_at").notNull(),
+});
