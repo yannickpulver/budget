@@ -5,7 +5,14 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as schema from "@/db/schema";
-import { computeAlignmentAdjustment, loadBudgetData, SnapshotStore } from "./queries";
+import {
+  computeAlignmentAdjustment,
+  getSidebarData,
+  listAccounts,
+  loadBudgetData,
+  reorderAccounts,
+  SnapshotStore,
+} from "./queries";
 import type { MonthSnapshot } from "./budget-math";
 
 /**
@@ -307,5 +314,31 @@ describe("SnapshotStore data_version guard", () => {
     const first = store.getSnapshot("2025-01");
     const second = store.getSnapshot("2025-01");
     expect(second).toBe(first);
+  });
+});
+
+describe("reorderAccounts", () => {
+  it("reindexes sort to match the given order, for only the passed ids", () => {
+    const dbi = makeDb();
+    // Account 1 ('Checking') already exists from the shared seed at sort 0.
+    sqlite.exec(`
+      INSERT INTO accounts (id, name, type, sort) VALUES
+        (2, 'Savings', 'savings', 1),
+        (3, 'Cash', 'cash', 2);
+    `);
+    expect(listAccounts(dbi).map((a) => a.id)).toEqual([1, 2, 3]);
+
+    reorderAccounts(dbi, [3, 1, 2]);
+
+    expect(listAccounts(dbi).map((a) => a.id)).toEqual([3, 1, 2]);
+  });
+
+  it("is reflected in getSidebarData's section ordering", () => {
+    const dbi = makeDb();
+    sqlite.exec(`INSERT INTO accounts (id, name, type, sort) VALUES (2, 'Savings', 'savings', 1);`);
+
+    reorderAccounts(dbi, [2, 1]);
+
+    expect(getSidebarData(dbi).budget.map((a) => a.id)).toEqual([2, 1]);
   });
 });

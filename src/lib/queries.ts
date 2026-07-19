@@ -1055,6 +1055,21 @@ export function listAccounts(dbi: DB = db): AccountRef[] {
     .map(({ id, name, type, closed }) => ({ id, name, type, closed }));
 }
 
+/**
+ * Reindex `orderedIds`' sort to their position (0..n), in one transaction —
+ * mirrors `reorderCategories`. Only touches the passed ids (typically one
+ * sidebar section, e.g. Budget); other accounts' sort values are left as-is,
+ * which is fine since each section is filtered by type before being sorted,
+ * so cross-section sort collisions don't affect ordering.
+ */
+export function reorderAccounts(dbi: DB, orderedIds: number[]): void {
+  dbi.transaction((tx) => {
+    orderedIds.forEach((id, sort) => {
+      tx.update(schema.accounts).set({ sort }).where(eq(schema.accounts.id, id)).run();
+    });
+  });
+}
+
 export type TransferTarget = Omit<AccountRef, "closed">;
 
 /** Open accounts eligible as a transfer target (everything but the current account). */

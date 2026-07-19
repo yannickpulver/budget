@@ -16,6 +16,7 @@ import {
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
+import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import { Eye, EyeOff, GripVertical, Plus, Trash2 } from "lucide-react";
 import { useState, useTransition } from "react";
@@ -95,7 +96,12 @@ export function CategoriesEditor({ groups: initialGroups }: { groups: CategoryGr
 
   return (
     <div className="flex max-w-2xl flex-col gap-4">
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleGroupDragEnd}>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleGroupDragEnd}
+        modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+      >
         <SortableContext items={groups.map((g) => g.id)} strategy={verticalListSortingStrategy}>
           <div className="divide-y divide-border rounded-lg border border-border">
             {groups.map((group) => (
@@ -212,7 +218,12 @@ function GroupBlock({
       {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
 
       <div className="mt-2 flex flex-col gap-0.5 pl-3">
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleCategoryDragEnd}>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleCategoryDragEnd}
+          modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+        >
           <SortableContext items={group.categories.map((c) => c.id)} strategy={verticalListSortingStrategy}>
             {group.categories.map((category) => (
               <CategoryBlock
