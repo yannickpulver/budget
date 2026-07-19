@@ -1,10 +1,28 @@
 "use client";
 
-import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { Eye, EyeOff, GripVertical, Plus, Trash2 } from "lucide-react";
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { CategoryGroupAdmin } from "@/lib/queries";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import type { CategoryAdmin, CategoryGroupAdmin } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import {
   type ActionResult,
@@ -12,33 +30,123 @@ import {
   createCategoryGroupAction,
   deleteCategoryAction,
   deleteCategoryGroupAction,
+  moveCategoryToGroupAction,
   renameCategoryAction,
   renameCategoryGroupAction,
+  reorderCategoriesAction,
+  reorderCategoryGroupsAction,
   setCategoryGroupHiddenAction,
   setCategoryHiddenAction,
 } from "./actions";
 
-export function CategoriesEditor({ groups }: { groups: CategoryGroupAdmin[] }) {
+export function CategoriesEditor({ groups: initialGroups }: { groups: CategoryGroupAdmin[] }) {
+  const [groups, setGroups] = useState(initialGroups);
+  // Re-sync local (optimistically reordered) state whenever the server sends
+  // fresh props, e.g. after another tab's edit — the "adjust state during
+  // render" pattern, so this doesn't need an effect.
+  const [syncedGroups, setSyncedGroups] = useState(initialGroups);
+  if (initialGroups !== syncedGroups) {
+    setSyncedGroups(initialGroups);
+    setGroups(initialGroups);
+  }
+  const [, startTransition] = useTransition();
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  function handleGroupDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setGroups((prev) => {
+      const oldIndex = prev.findIndex((g) => g.id === active.id);
+      const newIndex = prev.findIndex((g) => g.id === over.id);
+      const next = arrayMove(prev, oldIndex, newIndex);
+      startTransition(async () => {
+        await reorderCategoryGroupsAction(next.map((g) => g.id));
+      });
+      return next;
+    });
+  }
+
+  function handleCategoriesReordered(groupId: number, nextCategories: CategoryAdmin[]) {
+    setGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, categories: nextCategories } : g)));
+    startTransition(async () => {
+      await reorderCategoriesAction(groupId, nextCategories.map((c) => c.id));
+    });
+  }
+
+  function handleCategoryMoved(categoryId: number, fromGroupId: number, toGroupId: number) {
+    setGroups((prev) => {
+      const fromGroup = prev.find((g) => g.id === fromGroupId);
+      const category = fromGroup?.categories.find((c) => c.id === categoryId);
+      if (!category) return prev;
+      return prev.map((g) => {
+        if (g.id === fromGroupId) return { ...g, categories: g.categories.filter((c) => c.id !== categoryId) };
+        if (g.id === toGroupId) return { ...g, categories: [...g.categories, category] };
+        return g;
+      });
+    });
+    startTransition(async () => {
+      await moveCategoryToGroupAction(categoryId, toGroupId);
+    });
+  }
+
   return (
     <div className="flex max-w-2xl flex-col gap-4">
-      <div className="divide-y divide-border rounded-lg border border-border">
-        {groups.map((group) => (
-          <GroupBlock key={group.id} group={group} />
-        ))}
-        {groups.length === 0 && (
-          <div className="p-6 text-center text-sm text-muted-foreground">
-            No category groups yet — add one below.
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleGroupDragEnd}>
+        <SortableContext items={groups.map((g) => g.id)} strategy={verticalListSortingStrategy}>
+          <div className="divide-y divide-border rounded-lg border border-border">
+            {groups.map((group) => (
+              <GroupBlock
+                key={group.id}
+                group={group}
+                allGroups={groups}
+                onCategoriesReordered={handleCategoriesReordered}
+                onCategoryMoved={handleCategoryMoved}
+              />
+            ))}
+            {groups.length === 0 && (
+              <div className="p-6 text-center text-sm text-muted-foreground">
+                No category groups yet — add one below.
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </SortableContext>
+      </DndContext>
       <AddGroupForm />
     </div>
   );
 }
 
-function GroupBlock({ group }: { group: CategoryGroupAdmin }) {
+function GroupBlock({
+  group,
+  allGroups,
+  onCategoriesReordered,
+  onCategoryMoved,
+}: {
+  group: CategoryGroupAdmin;
+  allGroups: CategoryGroupAdmin[];
+  onCategoriesReordered: (groupId: number, nextCategories: CategoryAdmin[]) => void;
+  onCategoryMoved: (categoryId: number, fromGroupId: number, toGroupId: number) => void;
+}) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: group.id });
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  function handleCategoryDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = group.categories.findIndex((c) => c.id === active.id);
+    const newIndex = group.categories.findIndex((c) => c.id === over.id);
+    onCategoriesReordered(group.id, arrayMove(group.categories, oldIndex, newIndex));
+  }
 
   function toggleHidden() {
     setError(null);
@@ -57,13 +165,28 @@ function GroupBlock({ group }: { group: CategoryGroupAdmin }) {
   }
 
   return (
-    <div className={cn("p-3", pending && "opacity-60")}>
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={cn("p-3", (pending || isDragging) && "opacity-60")}
+    >
       <div className="flex items-center justify-between gap-2">
-        <EditableName
-          value={group.name}
-          className="text-sm font-semibold"
-          onSave={(name) => renameCategoryGroupAction(group.id, name)}
-        />
+        <div className="flex min-w-0 items-center gap-1">
+          <button
+            type="button"
+            {...attributes}
+            {...listeners}
+            className="flex shrink-0 cursor-grab touch-none items-center text-muted-foreground hover:text-foreground active:cursor-grabbing"
+            aria-label={`Drag to reorder group ${group.name}`}
+          >
+            <GripVertical className="size-3.5" />
+          </button>
+          <EditableName
+            value={group.name}
+            className="text-sm font-semibold"
+            onSave={(name) => renameCategoryGroupAction(group.id, name)}
+          />
+        </div>
         <div className="flex items-center gap-1">
           {group.hidden && <span className="text-xs text-muted-foreground">Hidden</span>}
           <Button
@@ -89,18 +212,41 @@ function GroupBlock({ group }: { group: CategoryGroupAdmin }) {
       {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
 
       <div className="mt-2 flex flex-col gap-0.5 pl-3">
-        {group.categories.map((category) => (
-          <CategoryBlock key={category.id} category={category} />
-        ))}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleCategoryDragEnd}>
+          <SortableContext items={group.categories.map((c) => c.id)} strategy={verticalListSortingStrategy}>
+            {group.categories.map((category) => (
+              <CategoryBlock
+                key={category.id}
+                category={category}
+                group={group}
+                allGroups={allGroups}
+                onMove={onCategoryMoved}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
         <AddCategoryForm groupId={group.id} />
       </div>
     </div>
   );
 }
 
-function CategoryBlock({ category }: { category: CategoryGroupAdmin["categories"][number] }) {
+function CategoryBlock({
+  category,
+  group,
+  allGroups,
+  onMove,
+}: {
+  category: CategoryAdmin;
+  group: CategoryGroupAdmin;
+  allGroups: CategoryGroupAdmin[];
+  onMove: (categoryId: number, fromGroupId: number, toGroupId: number) => void;
+}) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: category.id });
+
+  const otherGroups = allGroups.filter((g) => g.id !== group.id);
 
   function toggleHidden() {
     setError(null);
@@ -120,16 +266,49 @@ function CategoryBlock({ category }: { category: CategoryGroupAdmin["categories"
 
   return (
     <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cn(
         "flex items-center justify-between gap-2 rounded-md px-2 py-1 text-sm",
-        pending && "opacity-60",
+        (pending || isDragging) && "opacity-60",
         category.hidden && "text-muted-foreground"
       )}
     >
-      <EditableName value={category.name} onSave={(name) => renameCategoryAction(category.id, name)} />
+      <div className="flex min-w-0 items-center gap-1">
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          className="flex shrink-0 cursor-grab touch-none items-center text-muted-foreground hover:text-foreground active:cursor-grabbing"
+          aria-label={`Drag to reorder category ${category.name}`}
+        >
+          <GripVertical className="size-3.5" />
+        </button>
+        <EditableName value={category.name} onSave={(name) => renameCategoryAction(category.id, name)} />
+      </div>
       <div className="flex shrink-0 items-center gap-1">
         {error && <span className="text-xs text-destructive">{error}</span>}
         {category.hidden && <span className="text-xs text-muted-foreground">Hidden</span>}
+        {otherGroups.length > 0 && (
+          <Select
+            value=""
+            onValueChange={(groupId) => {
+              if (!groupId) return;
+              onMove(category.id, group.id, Number(groupId));
+            }}
+          >
+            <SelectTrigger size="sm" className="h-6 max-w-28 border-none bg-transparent px-1.5 text-xs shadow-none hover:bg-muted">
+              <SelectValue placeholder="Move to…" />
+            </SelectTrigger>
+            <SelectContent>
+              {otherGroups.map((g) => (
+                <SelectItem key={g.id} value={String(g.id)}>
+                  {g.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <Button
           size="icon-xs"
           variant="ghost"

@@ -207,8 +207,13 @@ function collectCategories(
     }
   };
 
-  for (const row of registerRows) record(row["Category Group"]);
+  // Plan.csv repeats the same group/category block for every month, so the
+  // first-occurrence order there is the user's actual YNAB sort order.
+  // Register.csv is chronological (transaction date order) and only used as
+  // a fallback for a group that appears solely in transactions and never in
+  // Plan.csv (e.g. deleted before ever being budgeted).
   for (const row of planRows) record(row["Category Group"]);
+  for (const row of registerRows) record(row["Category Group"]);
 
   return groupOrder.map((name, sort) => ({
     name,
@@ -242,8 +247,10 @@ function collectCategoriesWithinGroups(
     });
   };
 
-  for (const row of registerRows) record(row["Category Group"], row.Category);
+  // Same rationale as `collectCategories`: Plan.csv's first-occurrence order
+  // is the real sort order, Register.csv is only a fallback.
   for (const row of planRows) record(row["Category Group"], row.Category);
+  for (const row of registerRows) record(row["Category Group"], row.Category);
 
   return categories;
 }

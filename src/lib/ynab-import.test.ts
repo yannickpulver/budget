@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildImportResult, type RegisterRow } from "./ynab-import";
+import { buildImportResult, type PlanRow, type RegisterRow } from "./ynab-import";
 
 /**
  * Transfer-pairing regression coverage: the YNAB Register export has no
@@ -109,5 +109,61 @@ describe("buildImportResult transfer pairing", () => {
     expect(paired).toHaveLength(4);
     expect(unpaired).toHaveLength(1);
     expect(unpaired[0].memo).toBe("C");
+  });
+});
+
+function planRow(overrides: Partial<PlanRow>): PlanRow {
+  return {
+    Month: "Jul 2020",
+    "Category Group/Category": "",
+    "Category Group": "",
+    Category: "",
+    Assigned: "CHF 0.00",
+    Activity: "CHF 0.00",
+    Available: "CHF 0.00",
+    ...overrides,
+  };
+}
+
+/**
+ * Regression coverage for the group/category `sort` columns: Plan.csv
+ * repeats the same group/category block for every month, so its
+ * first-occurrence order is the user's actual YNAB order. Register.csv is
+ * chronological (transaction date order) and must NOT drive the sort — using
+ * it produced a scrambled category tree on a real migrated budget.
+ */
+describe("buildImportResult group/category order", () => {
+  it("orders groups and categories by their first appearance in Plan.csv, not Register.csv", () => {
+    // Register.csv sees "3. Business" before "1. Spending" (whichever
+    // category happened to be transacted first), which must NOT determine
+    // sort order.
+    const registerRows: RegisterRow[] = [
+      row({ Account: "Checking", Date: "05.03.2025", Payee: "Office", "Category Group": "3. Business", Category: "Supplies", Outflow: "CHF 10.00" }),
+      row({ Account: "Checking", Date: "06.03.2025", Payee: "Store", "Category Group": "1. Spending", Category: "Groceries", Outflow: "CHF 20.00" }),
+    ];
+    const planRows: PlanRow[] = [
+      planRow({ "Category Group": "1. Spending", Category: "Transport" }),
+      planRow({ "Category Group": "1. Spending", Category: "Groceries" }),
+      planRow({ "Category Group": "3. Business", Category: "Supplies" }),
+    ];
+
+    const result = buildImportResult(registerRows, planRows);
+
+    expect(result.categoryGroups.map((g) => g.name)).toEqual(["1. Spending", "3. Business"]);
+    expect(
+      result.categories.filter((c) => c.groupName === "1. Spending").map((c) => c.name)
+    ).toEqual(["Transport", "Groceries"]);
+    expect(result.categories.find((c) => c.name === "Supplies")?.sort).toBe(0);
+  });
+
+  it("falls back to Register.csv order for a group/category only ever transacted, never budgeted", () => {
+    const registerRows: RegisterRow[] = [
+      row({ Account: "Checking", Date: "05.03.2025", Payee: "Shop", "Category Group": "Untracked Group", Category: "One-off", Outflow: "CHF 5.00" }),
+    ];
+    const planRows: PlanRow[] = [planRow({ "Category Group": "1. Spending", Category: "Groceries" })];
+
+    const result = buildImportResult(registerRows, planRows);
+
+    expect(result.categoryGroups.map((g) => g.name)).toEqual(["1. Spending", "Untracked Group"]);
   });
 });

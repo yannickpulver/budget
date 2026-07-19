@@ -10,8 +10,11 @@ import {
   deleteCategory,
   deleteCategoryGroup,
   listCategoryGroupsAdmin,
+  moveCategoryToGroup,
   renameCategory,
   renameCategoryGroup,
+  reorderCategories,
+  reorderCategoryGroups,
   seedDefaultCategoriesIfEmpty,
   setCategoryGroupHidden,
   setCategoryHidden,
@@ -220,5 +223,66 @@ describe("category CRUD", () => {
     sqlite.exec(`INSERT INTO accounts (name, type, payment_category_id) VALUES ('Visa', 'credit', ${catId})`);
 
     expect(deleteCategory(dbi, catId).ok).toBe(false);
+  });
+});
+
+describe("reordering", () => {
+  it("reindexes group sort to match the given order", () => {
+    const dbi = makeDb();
+    const a = createCategoryGroup(dbi, "A");
+    const b = createCategoryGroup(dbi, "B");
+    const c = createCategoryGroup(dbi, "C");
+    expect(listCategoryGroupsAdmin(dbi).map((g) => g.id)).toEqual([a, b, c]);
+
+    reorderCategoryGroups(dbi, [c, a, b]);
+
+    const groups = listCategoryGroupsAdmin(dbi);
+    expect(groups.map((g) => g.id)).toEqual([c, a, b]);
+    expect(groups.map((g) => g.sort)).toEqual([0, 1, 2]);
+  });
+
+  it("reindexes category sort within a group to match the given order", () => {
+    const dbi = makeDb();
+    const groupId = createCategoryGroup(dbi, "Spending");
+    const x = createCategory(dbi, groupId, "X");
+    const y = createCategory(dbi, groupId, "Y");
+    const z = createCategory(dbi, groupId, "Z");
+
+    reorderCategories(dbi, groupId, [z, x, y]);
+
+    const categories = listCategoryGroupsAdmin(dbi)[0].categories;
+    expect(categories.map((c) => c.id)).toEqual([z, x, y]);
+    expect(categories.map((c) => c.sort)).toEqual([0, 1, 2]);
+  });
+
+  it("moves a category to another group, appended at the end", () => {
+    const dbi = makeDb();
+    const groupA = createCategoryGroup(dbi, "A");
+    const groupB = createCategoryGroup(dbi, "B");
+    const moving = createCategory(dbi, groupA, "Moving");
+    createCategory(dbi, groupB, "Existing 1");
+    createCategory(dbi, groupB, "Existing 2");
+
+    moveCategoryToGroup(dbi, moving, groupB);
+
+    const groups = listCategoryGroupsAdmin(dbi);
+    const fromGroup = groups.find((g) => g.id === groupA)!;
+    const toGroup = groups.find((g) => g.id === groupB)!;
+    expect(fromGroup.categories).toHaveLength(0);
+    expect(toGroup.categories.map((c) => c.name)).toEqual(["Existing 1", "Existing 2", "Moving"]);
+    expect(toGroup.categories.find((c) => c.name === "Moving")?.sort).toBe(2);
+  });
+
+  it("appends to an empty target group at sort 0", () => {
+    const dbi = makeDb();
+    const groupA = createCategoryGroup(dbi, "A");
+    const groupB = createCategoryGroup(dbi, "B");
+    const moving = createCategory(dbi, groupA, "Moving");
+
+    moveCategoryToGroup(dbi, moving, groupB);
+
+    const toGroup = listCategoryGroupsAdmin(dbi).find((g) => g.id === groupB)!;
+    expect(toGroup.categories).toHaveLength(1);
+    expect(toGroup.categories[0].sort).toBe(0);
   });
 });

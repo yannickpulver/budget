@@ -6,8 +6,11 @@ import {
   createCategoryGroup as createCategoryGroupRow,
   deleteCategory as deleteCategoryRow,
   deleteCategoryGroup as deleteCategoryGroupRow,
+  moveCategoryToGroup as moveCategoryToGroupRow,
   renameCategory as renameCategoryRow,
   renameCategoryGroup as renameCategoryGroupRow,
+  reorderCategories as reorderCategoriesRow,
+  reorderCategoryGroups as reorderCategoryGroupsRow,
   setCategoryGroupHidden as setCategoryGroupHiddenRow,
   setCategoryHidden as setCategoryHiddenRow,
   type SettingsResult,
@@ -46,6 +49,12 @@ export async function deleteCategoryGroupAction(id: number): Promise<ActionResul
   return result;
 }
 
+export async function reorderCategoryGroupsAction(orderedGroupIds: number[]): Promise<ActionResult> {
+  reorderCategoryGroupsRow(db, orderedGroupIds);
+  refresh();
+  return { ok: true };
+}
+
 export async function createCategoryAction(
   groupId: number,
   name: string
@@ -75,4 +84,19 @@ export async function deleteCategoryAction(id: number): Promise<ActionResult> {
   const result = deleteCategoryRow(db, id);
   if (result.ok) refresh();
   return result;
+}
+
+export async function reorderCategoriesAction(
+  groupId: number,
+  orderedCategoryIds: number[]
+): Promise<ActionResult> {
+  reorderCategoriesRow(db, groupId, orderedCategoryIds);
+  refresh();
+  return { ok: true };
+}
+
+export async function moveCategoryToGroupAction(id: number, groupId: number): Promise<ActionResult> {
+  moveCategoryToGroupRow(db, id, groupId);
+  refresh();
+  return { ok: true };
 }
