@@ -22,7 +22,7 @@ import {
   type TxnInput,
 } from "../src/lib/budget-math";
 import { adjustAssignment, setAccountClosed } from "../src/lib/queries";
-import { computePaymentCategoryAdjustments, type PaymentCategoryAdjustment } from "../src/lib/reconciliation";
+import { computePaymentCategoryAdjustmentsAllMonths, type PaymentCategoryAdjustment } from "../src/lib/reconciliation";
 
 const PLAN_DIR = path.join(process.cwd(), "plan");
 const BATCH_SIZE = 300;
@@ -236,11 +236,17 @@ function buildVerificationDiffs(
   availableByMonth: Map<string, Map<number, number>>,
   last12Months: string[]
 ) {
+  // Non-credit categories are only expected to match over the recent window
+  // (older months drift by the known overspend-clamp model difference), but
+  // credit-payment categories are now snapped to Plan.csv at EVERY month, so
+  // they're verified across the full history — not just the last 12.
+  const last12 = new Set(last12Months);
   const diffs: Diff[] = [];
   for (const entry of result.planAvailable) {
-    if (!last12Months.includes(entry.month)) continue;
     const categoryId = categoryIdByKey.get(`${entry.groupName}::${entry.categoryName}`);
     if (categoryId == null) continue;
+    const isCreditPayment = paymentCategoryIds.has(categoryId);
+    if (!isCreditPayment && !last12.has(entry.month)) continue;
     const actual = availableByMonth.get(entry.month)?.get(categoryId) ?? 0;
     const diff = actual - entry.available;
     diffs.push({
@@ -250,7 +256,7 @@ function buildVerificationDiffs(
       expected: entry.available,
       actual,
       diff,
-      isCreditPayment: paymentCategoryIds.has(categoryId),
+      isCreditPayment,
     });
   }
 
@@ -350,9 +356,12 @@ function main() {
     console.log("  none");
   }
 
-  // --- Reconciliation: snap every credit-payment category's Available at
-  // the export's final month to YNAB's own Plan.csv value, booked as an
-  // additional assignment. Only ever touches the final month.
+  // --- Reconciliation: snap every credit-payment category's Available to
+  // YNAB's own Plan.csv value at EVERY month it has one — booked as an
+  // additional assignment per month. YNAB's un-exported credit-card mechanics
+  // leave phantom Available in these categories in every historical month, so
+  // reconciling only the final month leaves earlier months (and their Ready
+  // to Assign) wrong.
   const accountInfoById = new Map<number, AccountInfo>();
   for (const account of result.accounts) {
     const id = accountIdByName.get(account.name)!;
@@ -386,12 +395,15 @@ function main() {
     const walkBefore = walkAllMonths(months, allCategoryIds, accountInfoById, resolvedAssignments, txnsByMonth);
     rtaBefore = walkBefore.rtaByMonth.get(finalMonth) ?? 0;
 
-    adjustments = computePaymentCategoryAdjustments({
+    adjustments = computePaymentCategoryAdjustmentsAllMonths({
+      months,
+      categoryIds: allCategoryIds,
+      accounts: accountInfoById,
+      assignmentByKey: resolvedAssignments,
+      txnsByMonth,
       creditCardLinks: result.creditCardLinks,
       categoryIdByKey,
       planAvailable: result.planAvailable,
-      ourAvailableAtMonth: walkBefore.availableByMonth.get(finalMonth) ?? new Map(),
-      month: finalMonth,
     });
 
     for (const adjustment of adjustments) {
@@ -407,18 +419,25 @@ function main() {
     walkAfterAvailable = walkAfter.availableByMonth;
   }
 
-  console.log(`\n=== Reconciliation (${finalMonth ?? "n/a"}) ===`);
-  console.log(`Ready to Assign before: ${formatRappen(rtaBefore)}`);
+  const monthsTouched = new Set(adjustments.map((a) => a.month)).size;
+  console.log(`\n=== Reconciliation (per-month, ${months.at(0) ?? "n/a"} .. ${finalMonth ?? "n/a"}) ===`);
+  console.log(`Ready to Assign at ${finalMonth ?? "n/a"} before: ${formatRappen(rtaBefore)}`);
   if (adjustments.length > 0) {
-    for (const a of adjustments) {
-      console.log(
-        `  ${a.accountName}: plan available ${formatRappen(a.planAvailable)}, ours was ${formatRappen(a.ourAvailable)}, adjustment ${formatRappen(a.delta)}`
-      );
+    console.log(`Booked ${adjustments.length} payment-category adjustments across ${monthsTouched} months.`);
+    // Final-month detail (the month the app opens on) for a quick sanity check.
+    const finalAdjustments = adjustments.filter((a) => a.month === finalMonth);
+    if (finalAdjustments.length > 0) {
+      console.log(`  At ${finalMonth}:`);
+      for (const a of finalAdjustments) {
+        console.log(
+          `    ${a.accountName}: plan available ${formatRappen(a.planAvailable)}, ours was ${formatRappen(a.ourAvailable)}, adjustment ${formatRappen(a.delta)}`
+        );
+      }
     }
   } else {
     console.log("  no adjustments (all payment categories already matched Plan.csv)");
   }
-  console.log(`Ready to Assign after:  ${formatRappen(rtaAfter)}`);
+  console.log(`Ready to Assign at ${finalMonth ?? "n/a"} after:  ${formatRappen(rtaAfter)}`);
 
   const last12Months = months.slice(-12);
   const report = buildVerificationDiffs(
@@ -430,14 +449,15 @@ function main() {
   );
   const balanceByAccountName = computeAccountBalances(accountIdByName, resolvedTransactions);
 
-  console.log("\n=== Verification report (last 12 months) ===");
-  console.log(`Months checked: ${last12Months[0]} .. ${last12Months.at(-1)}`);
+  console.log("\n=== Verification report ===");
+  console.log(`Non-credit-payment months checked: ${last12Months[0]} .. ${last12Months.at(-1)} (last 12)`);
   console.log(
     `Non-credit-payment category-months: ${report.regularTotal} total, ${report.regularMatches} matching, ${report.regularMismatches} mismatching` +
       ` (${((report.regularMatches / report.regularTotal) * 100).toFixed(2)}% match rate)`
   );
+  console.log(`Credit-payment months checked: ${months.at(0)} .. ${finalMonth} (full history)`);
   console.log(
-    `Credit-payment category-months: ${report.creditPaymentTotal} total, ${report.creditMismatches} mismatching (informational, not gating)`
+    `Credit-payment category-months: ${report.creditPaymentTotal} total, ${report.creditMismatches} mismatching (must be 0 — snapped to Plan.csv every month)`
   );
 
   if (report.worst.length > 0) {
@@ -452,12 +472,14 @@ function main() {
   }
 
   if (report.worstCreditPayment.length > 0) {
-    console.log("\nWorst 5 credit-payment diffs (informational, not gating):");
+    console.log("\nWorst 5 credit-payment diffs (should be none):");
     for (const d of report.worstCreditPayment) {
       console.log(
         `  ${d.month} ${d.groupName}: ${d.categoryName} — expected ${formatRappen(d.expected)}, got ${formatRappen(d.actual)} (diff ${formatRappen(d.diff)})`
       );
     }
+  } else {
+    console.log("\nNo mismatches on credit-payment categories (all months snapped to Plan.csv).");
   }
 
   console.log("\n=== Account balances ===");
@@ -486,13 +508,22 @@ function main() {
     );
   }
 
-  if (report.regularMismatches > 0) {
-    console.error(
-      `\nFAILED: ${report.regularMismatches} non-credit-payment category-months did not match Plan.csv.`
-    );
+  if (report.regularMismatches > 0 || report.creditMismatches > 0) {
+    if (report.regularMismatches > 0) {
+      console.error(
+        `\nFAILED: ${report.regularMismatches} non-credit-payment category-months did not match Plan.csv.`
+      );
+    }
+    if (report.creditMismatches > 0) {
+      console.error(
+        `\nFAILED: ${report.creditMismatches} credit-payment category-months did not match Plan.csv.`
+      );
+    }
     process.exitCode = 1;
   } else {
-    console.log("\nOK: all non-credit-payment categories match Plan.csv for the last 12 months.");
+    console.log(
+      "\nOK: all non-credit-payment categories match Plan.csv for the last 12 months, and all credit-payment categories match across the full history."
+    );
   }
 }
 
