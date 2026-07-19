@@ -43,7 +43,7 @@ An **open-source, self-hostable, private YNAB alternative** — built for anyone
 
 ## Data model
 
-- `accounts` — id, name, type (`checking|savings|cash|credit|tracking`), closed, sort
+- `accounts` — id, name, type (`checking|savings|cash|credit|giftcard|tracking`), closed, sort. `giftcard` is a small on-budget account (funds count toward Ready to Assign and net worth); top-ups/purchases are plain transfers to/from it like any other on-budget account.
 - `category_groups` — id, name, sort, hidden
 - `categories` — id, group_id, name, sort, hidden, monthly_target? (Rappen, null = no goal)
 - `transactions` — id, account_id, date (ISO), payee, category_id?, memo, amount (Rappen, +in/−out), cleared, transfer_account_id?, import_hash?
