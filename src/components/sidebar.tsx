@@ -70,7 +70,7 @@ export function Sidebar({ data: initialData }: { data: SidebarData }) {
 
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-sidebar">
-      <div className="px-4 py-4 text-sm font-semibold tracking-tight">newbudget</div>
+      <div className="px-4 py-4 text-sm font-semibold tracking-tight">budget</div>
 
       <nav className="flex-1 overflow-y-auto px-2 pb-3">
         <SidebarLink href={`/budget/${currentMonthKey()}`} active={pathname.startsWith("/budget")}>

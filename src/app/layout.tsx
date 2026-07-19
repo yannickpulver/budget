@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "newbudget",
+  title: "budget",
   description: "Self-hosted envelope budgeting",
 };
 

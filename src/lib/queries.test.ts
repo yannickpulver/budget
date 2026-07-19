@@ -256,7 +256,7 @@ describe("SnapshotStore data_version guard", () => {
   let ownConn: Database.Database;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "newbudget-data-version-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "budget-data-version-"));
     dbPath = path.join(tmpDir, "scratch.db");
     ownConn = new Database(dbPath);
     ownConn.exec(DDL);

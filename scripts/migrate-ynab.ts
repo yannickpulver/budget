@@ -311,7 +311,7 @@ function main() {
         "This script is a ONE-TIME YNAB migration — it WIPES every transaction,\n" +
         "account, category, group, and assignment, then replaces them with a\n" +
         "fresh import from the CSVs in plan/. It's meant to be run once, before\n" +
-        "you start using newbudget day to day, not as an ongoing sync.\n\n" +
+        "you start using budget day to day, not as an ongoing sync.\n\n" +
         "If you're sure you want to discard the current data and re-import,\n" +
         "re-run with --force:\n\n" +
         "  pnpm migrate:ynab --force\n"

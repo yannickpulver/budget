@@ -34,7 +34,7 @@ export async function generateMetadata({
   params: Promise<{ month: string }>;
 }): Promise<Metadata> {
   const { month } = await params;
-  return { title: isValidMonth(month) ? `${monthLabel(month)} · newbudget` : "newbudget" };
+  return { title: isValidMonth(month) ? `${monthLabel(month)} · budget` : "budget" };
 }
 
 const GRID = "grid grid-cols-[minmax(12rem,1fr)_7.5rem_7.5rem_8.5rem] items-center gap-x-2";
@@ -113,7 +113,7 @@ function EmptyState({ hasAccounts }: { hasAccounts: boolean }) {
     <div className="mx-auto max-w-md rounded-lg border border-dashed border-border p-8 text-center">
       <Wallet className="mx-auto size-6 text-muted-foreground" />
       <h2 className="mt-3 text-sm font-semibold">
-        {hasAccounts ? "No categories to budget yet" : "Welcome to newbudget"}
+        {hasAccounts ? "No categories to budget yet" : "Welcome to budget"}
       </h2>
       <p className="mt-1.5 text-sm text-muted-foreground">
         {hasAccounts

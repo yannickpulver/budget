@@ -5,7 +5,7 @@ import { listCategoryGroupsAdmin } from "@/lib/queries";
 import { CategoriesEditor } from "./categories-editor";
 
 export const metadata: Metadata = {
-  title: "Categories · newbudget",
+  title: "Categories · budget",
 };
 
 export default function CategoriesSettingsPage() {

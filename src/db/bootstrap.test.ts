@@ -16,7 +16,7 @@ let dbPath: string;
 const originalDatabasePath = process.env.DATABASE_PATH;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "newbudget-onboarding-"));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "budget-onboarding-"));
   dbPath = path.join(tmpDir, "scratch.db");
   process.env.DATABASE_PATH = dbPath;
   vi.resetModules();
