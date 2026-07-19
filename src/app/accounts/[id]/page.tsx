@@ -8,9 +8,11 @@ import {
   getAccountRegister,
   getCategoryOptions,
   getHoldingsView,
+  getPayeeSuggestions,
   getTransferTargets,
   listAccounts,
 } from "@/lib/queries";
+import { getPayeeIconMap } from "@/lib/payee-icons";
 import { cn } from "@/lib/utils";
 import { AccountHeader } from "./account-header";
 import { AddTransactionRow } from "./add-transaction-row";
@@ -49,6 +51,8 @@ export default async function AccountPage({
   const register = getAccountRegister(id, { search, page }, db);
   const groups = getCategoryOptions(db);
   const transferTargets = getTransferTargets(id, db);
+  const payeeSuggestions = getPayeeSuggestions(db);
+  const payeeIcons = getPayeeIconMap(db);
   const accountsById = new Map(listAccounts(db).map((a) => [a.id, a]));
   const holdingsView = detail.type === "tracking" ? getHoldingsView(id, db) : null;
 
@@ -80,7 +84,12 @@ export default async function AccountPage({
 
         <div className="rounded-lg border border-border">
           <div className="border-b border-border">
-            <AddTransactionRow accountId={id} groups={groups} transferTargets={transferTargets} />
+            <AddTransactionRow
+              accountId={id}
+              groups={groups}
+              transferTargets={transferTargets}
+              payeeSuggestions={payeeSuggestions}
+            />
           </div>
 
           <div className="divide-y divide-border/60">
@@ -92,6 +101,8 @@ export default async function AccountPage({
                 accountType={detail.type}
                 groups={groups}
                 accountsById={accountsById}
+                payeeSuggestions={payeeSuggestions}
+                iconUrl={payeeIcons[row.payee]}
               />
             ))}
             {register.rows.length === 0 && (
