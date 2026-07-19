@@ -11,6 +11,7 @@ import {
   deleteTransaction as deleteTransactionRow,
   getAccountDetail,
   renameAccount as renameAccountRow,
+  reorderAccounts as reorderAccountsRow,
   setAccountBalance,
   setAccountClosed,
   setAccountIcon,
@@ -59,6 +60,13 @@ export async function renameAccountAction(id: number, name: string): Promise<Act
   if (!trimmed) return { ok: false, error: "Name is required." };
   renameAccountRow(db, id, trimmed);
   refresh(id);
+  return { ok: true };
+}
+
+/** Reorder accounts within one sidebar section (Budget/Giftcards/Tracking) — `ids` is that section's full id list in the new order. */
+export async function reorderAccountsAction(ids: number[]): Promise<ActionResult> {
+  reorderAccountsRow(db, ids);
+  refresh();
   return { ok: true };
 }
 
