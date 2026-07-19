@@ -309,7 +309,7 @@ function Row({
   const underfunded = category.goal != null && !category.goal.met;
 
   return (
-    <div className={cn(GRID, "px-2 py-1", underfunded && "bg-amber-50")}>
+    <div className={cn(GRID, "px-2 py-0.5", underfunded && "bg-amber-50")}>
       <div className="flex min-w-0 items-center justify-between gap-2 pr-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="truncate text-sm">{category.name}</span>
