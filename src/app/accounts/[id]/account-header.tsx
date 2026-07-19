@@ -16,8 +16,10 @@ import {
   reopenAccountAction,
   updateAccountTypeAction,
 } from "../actions";
+import { AccountIconPopover } from "./account-icon-popover";
 import { ImportCsvDialog } from "./import-csv-dialog";
 import { ImportStatementDialog } from "./import-statement-dialog";
+import { SetBalancePopover } from "./set-balance-popover";
 
 const TYPE_LABEL: Record<AccountDetail["type"], string> = {
   checking: "Checking",
@@ -94,6 +96,7 @@ export function AccountHeader({ detail }: { detail: AccountDetail }) {
       <div className="flex items-start justify-between gap-6">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
+            <AccountIconPopover accountId={detail.id} type={detail.type} icon={detail.icon} />
             {editingName ? (
               <Input
                 autoFocus
@@ -161,8 +164,13 @@ export function AccountHeader({ detail }: { detail: AccountDetail }) {
         </div>
 
         <div className="flex shrink-0 flex-col items-end gap-2">
-          <div className={cn("text-2xl font-semibold tabular-nums", balanceClass(detail.balance))}>
-            {formatCurrency(detail.balance, detail.currency)}
+          <div className="flex items-center gap-2">
+            <div className={cn("text-2xl font-semibold tabular-nums", balanceClass(detail.balance))}>
+              {formatCurrency(detail.balance, detail.currency)}
+            </div>
+            {detail.type === "tracking" && (
+              <SetBalancePopover accountId={detail.id} balance={detail.balance} />
+            )}
           </div>
           <div className="flex gap-1.5">
             <ImportCsvDialog accountId={detail.id} currency={detail.currency} />

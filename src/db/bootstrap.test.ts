@@ -134,4 +134,20 @@ describe("fresh database bootstrap", () => {
     expect(getSidebarData(db).giftcards).toEqual([]);
     sqlite.close();
   });
+
+  it("new accounts default to a null icon (type default) until one is set", async () => {
+    const { db, sqlite } = await import("@/db");
+    const { createAccount, getAccountDetail, getSidebarData, setAccountIcon } = await import("@/lib/queries");
+
+    const accountId = createAccount(db, { name: "Checking", type: "checking", startingBalance: 0, date: "2026-01-01" });
+
+    expect(getAccountDetail(accountId, db)?.icon).toBeNull();
+    expect(getSidebarData(db).budget[0].icon).toBeNull();
+
+    setAccountIcon(db, accountId, "🏦");
+    expect(getAccountDetail(accountId, db)?.icon).toBe("🏦");
+    expect(getSidebarData(db).budget[0].icon).toBe("🏦");
+
+    sqlite.close();
+  });
 });

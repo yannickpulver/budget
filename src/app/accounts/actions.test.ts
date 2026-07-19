@@ -137,3 +137,62 @@ describe("updateTransactionAction", () => {
     expect(after).toEqual(before);
   });
 });
+
+describe("updateAccountIconAction", () => {
+  it("sets a free-text emoji override and resets it back to null", async () => {
+    const { db, a } = await seedTwoAccounts();
+    const { updateAccountIconAction } = await import("./actions");
+    const { getAccountDetail } = await import("@/lib/queries");
+
+    expect(getAccountDetail(a, db)?.icon).toBeNull();
+
+    await updateAccountIconAction(a, "🏦");
+    expect(getAccountDetail(a, db)?.icon).toBe("🏦");
+
+    await updateAccountIconAction(a, null);
+    expect(getAccountDetail(a, db)?.icon).toBeNull();
+  });
+});
+
+describe("setAccountBalanceAction", () => {
+  it("rejects non-finite/absurd targets with an error, writing nothing", async () => {
+    const { db, a } = await seedTwoAccounts();
+    const { setAccountBalanceAction } = await import("./actions");
+    const schema = await import("@/db/schema");
+
+    for (const amount of BAD_AMOUNTS) {
+      const result = await setAccountBalanceAction(a, amount);
+      expect(result).toEqual({ ok: false, error: "Amount is not a valid number." });
+    }
+
+    expect(db.select().from(schema.transactions).all()).toHaveLength(0);
+  });
+
+  it("books an uncategorized, cleared Balance Adjustment for the difference", async () => {
+    const { db, a } = await seedTwoAccounts();
+    const { setAccountBalanceAction } = await import("./actions");
+    const { getAccountDetail } = await import("@/lib/queries");
+    const schema = await import("@/db/schema");
+
+    const result = await setAccountBalanceAction(a, 75_000);
+    expect(result).toEqual({ ok: true });
+    expect(getAccountDetail(a, db)?.balance).toBe(75_000);
+
+    const txn = db.select().from(schema.transactions).get()!;
+    expect(txn.payee).toBe("Balance Adjustment");
+    expect(txn.memo).toBe("Manual balance update");
+    expect(txn.categoryId).toBeNull();
+    expect(txn.cleared).toBe(true);
+  });
+
+  it("is a no-op when the target already equals the current balance", async () => {
+    const { db, a } = await seedTwoAccounts();
+    const { setAccountBalanceAction } = await import("./actions");
+    const schema = await import("@/db/schema");
+
+    await setAccountBalanceAction(a, 75_000);
+    const result = await setAccountBalanceAction(a, 75_000);
+    expect(result).toEqual({ ok: false, error: "Already at that balance." });
+    expect(db.select().from(schema.transactions).all()).toHaveLength(1);
+  });
+});
