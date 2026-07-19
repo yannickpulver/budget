@@ -1,7 +1,7 @@
 services:
-  newbudget:
+  budget:
     build: .
-    # Or, once published: image: ghcr.io/<you>/newbudget:latest
+    # Or, once published: image: ghcr.io/<you>/budget:latest
     ports:
       - "3000:3000"
     volumes:

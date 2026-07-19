@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Compass } from "lucide-react";
 
 export const metadata: Metadata = {
-  title: "Not found · newbudget",
+  title: "Not found · budget",
 };
 
 export default function NotFound() {
