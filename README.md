@@ -170,6 +170,25 @@ account + date + amount + payee) so you can uncheck anything already
 present, and unmatched categories simply come in uncategorized rather than
 blocking the import.
 
+A minimal example (extra YNAB columns like `Account` or `Flag` are
+tolerated and ignored):
+
+```csv
+"Date","Payee","Category","Memo","Outflow","Inflow"
+"03.07.2026","Migros","Groceries","","CHF 42.15",""
+"04.07.2026","SBB","Transport","GA monthly","89.00",""
+"25.07.2026","Employer AG","Inflow: Ready to Assign","salary","","CHF 5'400.00"
+```
+
+Notes:
+
+- Income rows use the category `Inflow: Ready to Assign` (YNAB's
+  convention) — they land uncategorized and raise Ready to Assign.
+- Amounts accept `CHF 12.34`, plain `12.34`, and Swiss thousands
+  separators (`5'400.00`); put the value in either Outflow or Inflow.
+- Files may be UTF-8 with or without BOM; fields with commas must be
+  quoted (any standard CSV writer does this).
+
 ## Investments & privacy
 
 Tracking-account holdings (symbol + quantity) get priced via Yahoo Finance's
