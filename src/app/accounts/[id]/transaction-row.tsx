@@ -1,7 +1,7 @@
 "use client";
 
 import { CircleCheck, Circle, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Input } from "@/components/ui/input";
 import type { AccountType } from "@/lib/budget-math";
 import { formatMoney, parseMoneyInput } from "@/lib/currency";
@@ -11,14 +11,19 @@ import { deleteTransactionAction, toggleClearedAction, updateTransactionAction }
 import { CategorySelect } from "./category-select";
 import { REGISTER_GRID } from "./grid";
 
-/**
- * Shared look for always-editable register cells: invisible border/background
- * at rest, a subtle hover fill, and a visible focus ring — no padding or
- * border-width changes between states, so nothing shifts when you hover or
- * focus into a cell.
- */
-const CELL_FIELD =
-  "h-7 rounded-md border border-transparent bg-transparent px-1.5 shadow-none transition-colors hover:bg-muted focus-visible:bg-background focus-visible:border-ring";
+/** Box metrics shared by every cell's text and editor state, so swapping between them never shifts the row. */
+const CELL_BOX = "h-7 rounded-md px-1.5";
+
+/** Look of a mounted editor: visible chrome, replaces the plain text for the duration of the edit. */
+const CELL_FIELD = cn(CELL_BOX, "border border-input shadow-none");
+
+/** "YYYY-MM-DD" -> "dd.mm.yyyy"; passes through anything that doesn't parse. */
+function formatDateDisplay(isoDate: string): string {
+  const parts = isoDate.split("-");
+  if (parts.length !== 3) return isoDate;
+  const [year, month, day] = parts;
+  return `${day}.${month}.${year}`;
+}
 
 interface AmountFields {
   outflow: string;
@@ -54,6 +59,77 @@ interface Committed {
 
 type FieldName = "date" | "payee" | "category" | "memo" | "outflow" | "inflow";
 
+/**
+ * Swaps a register cell between plain text (at rest) and its editor (while
+ * `editing`). Text mode is a focusable, click/Enter-activated element with
+ * the same height/padding as the editor, so nothing shifts on swap; an
+ * optional `placeholder` surfaces only on row hover when `text` is empty, to
+ * hint that an empty cell is still editable.
+ */
+function EditableCell({
+  editing,
+  editor,
+  onStartEdit,
+  ariaLabel,
+  text,
+  placeholder,
+  align = "left",
+  muted = false,
+  small = false,
+  tabular = false,
+}: {
+  editing: boolean;
+  editor: React.ReactNode;
+  onStartEdit: () => void;
+  ariaLabel: string;
+  text: string;
+  placeholder?: string;
+  align?: "left" | "right";
+  muted?: boolean;
+  small?: boolean;
+  tabular?: boolean;
+}) {
+  if (editing) return <>{editor}</>;
+
+  const isEmpty = text === "";
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={ariaLabel}
+      onClick={onStartEdit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          onStartEdit();
+        }
+      }}
+      className={cn(
+        CELL_BOX,
+        "flex min-w-0 cursor-default items-center outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        align === "right" && "justify-end"
+      )}
+    >
+      {isEmpty && placeholder ? (
+        <span className="min-w-0 truncate text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100">
+          {placeholder}
+        </span>
+      ) : (
+        <span
+          className={cn(
+            "min-w-0 truncate",
+            muted && "text-muted-foreground",
+            small && "text-xs",
+            tabular && "tabular-nums"
+          )}
+        >
+          {text}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function TransactionRow({
   row,
   accountId,
@@ -75,6 +151,9 @@ export function TransactionRow({
   const [categoryId, setCategoryId] = useState<number | null>(row.categoryId);
   const [memo, setMemo] = useState(row.memo);
   const [amountFields, setAmountFields] = useState<AmountFields>(() => amountToFields(row.amount));
+
+  // Which cell (if any) is currently swapped into its editor.
+  const [editingField, setEditingField] = useState<FieldName | null>(null);
 
   // Tracks which field currently has focus so external row updates (e.g. a
   // save landing, or the cleared toggle) don't clobber an in-progress edit —
@@ -128,6 +207,20 @@ export function TransactionRow({
   const linkedCategoryEditable = isTransfer && accountType !== "tracking" && otherAccount?.type === "tracking";
 
   const displayPayee = isTransfer ? `Transfer: ${row.transferAccountName ?? "?"}` : row.payee;
+
+  // Resolved client-side so a just-picked category shows correctly before
+  // the server round trip lands (row.categoryName lags one commit behind).
+  const categoryNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const group of groups) for (const category of group.categories) map.set(category.id, category.name);
+    return map;
+  }, [groups]);
+  const categoryText =
+    categoryId == null
+      ? isTransfer
+        ? "Budget category"
+        : "Ready to Assign"
+      : (categoryNameById.get(categoryId) ?? row.categoryName ?? "Category");
 
   function toggleCleared(e: React.MouseEvent) {
     e.stopPropagation();
@@ -208,145 +301,205 @@ export function TransactionRow({
     commit({ categoryId: next });
   }
 
+  /** Shared blur handling for the text-ish editors: exit edit mode, then commit unless Escape just reverted. */
+  function commitOnBlur() {
+    focusedField.current = null;
+    setEditingField(null);
+    if (skipNextCommit.current) {
+      skipNextCommit.current = false;
+      return;
+    }
+    commit();
+  }
+
   return (
     <div className={cn(REGISTER_GRID, "group px-2 py-1.5 text-sm", pending && "opacity-50")}>
-      <Input
-        type="date"
-        value={date}
-        onChange={(e) => setDate(e.currentTarget.value)}
-        onFocus={() => (focusedField.current = "date")}
-        onBlur={() => {
-          focusedField.current = null;
-          if (skipNextCommit.current) {
-            skipNextCommit.current = false;
-            return;
-          }
-          commit();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          if (e.key === "Escape") {
-            skipNextCommit.current = true;
-            revertDate();
-            e.currentTarget.blur();
-          }
-        }}
-        className={cn(CELL_FIELD, "text-xs text-muted-foreground tabular-nums")}
-        aria-label="Date"
+      <EditableCell
+        editing={editingField === "date"}
+        onStartEdit={() => setEditingField("date")}
+        ariaLabel="Date"
+        text={formatDateDisplay(date)}
+        small
+        muted
+        tabular
+        editor={
+          <Input
+            type="date"
+            autoFocus
+            value={date}
+            onChange={(e) => setDate(e.currentTarget.value)}
+            onFocus={() => (focusedField.current = "date")}
+            onBlur={commitOnBlur}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                skipNextCommit.current = true;
+                revertDate();
+                e.currentTarget.blur();
+              }
+            }}
+            className={cn(CELL_FIELD, "text-xs text-muted-foreground tabular-nums")}
+            aria-label="Date"
+          />
+        }
       />
       {isTransfer ? (
-        <div className="truncate px-1.5 text-sm">{displayPayee}</div>
+        <div className={cn(CELL_BOX, "flex min-w-0 items-center")} aria-label="Payee">
+          <span className="min-w-0 truncate">{displayPayee}</span>
+        </div>
       ) : (
-        <Input
-          value={payee}
-          onChange={(e) => setPayee(e.currentTarget.value)}
-          onFocus={() => (focusedField.current = "payee")}
-          onBlur={() => {
-            focusedField.current = null;
-            if (skipNextCommit.current) {
-              skipNextCommit.current = false;
-              return;
-            }
-            commit();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-            if (e.key === "Escape") {
-              skipNextCommit.current = true;
-              revertPayee();
-              e.currentTarget.blur();
-            }
-          }}
-          placeholder="Payee"
-          className={cn(CELL_FIELD, "text-sm")}
-          aria-label="Payee"
+        <EditableCell
+          editing={editingField === "payee"}
+          onStartEdit={() => setEditingField("payee")}
+          ariaLabel="Payee"
+          text={payee}
+          placeholder="add payee"
+          editor={
+            <Input
+              autoFocus
+              value={payee}
+              onChange={(e) => setPayee(e.currentTarget.value)}
+              onFocus={(e) => {
+                focusedField.current = "payee";
+                e.currentTarget.select();
+              }}
+              onBlur={commitOnBlur}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") {
+                  skipNextCommit.current = true;
+                  revertPayee();
+                  e.currentTarget.blur();
+                }
+              }}
+              placeholder="Payee"
+              className={cn(CELL_FIELD, "text-sm")}
+              aria-label="Payee"
+            />
+          }
         />
       )}
       {isTransfer && !linkedCategoryEditable ? (
-        <div className="truncate px-1.5 text-sm text-muted-foreground">—</div>
+        <div className={cn(CELL_BOX, "flex min-w-0 items-center text-muted-foreground")}>
+          <span className="min-w-0 truncate">—</span>
+        </div>
       ) : (
-        <CategorySelect
-          groups={groups}
-          value={categoryId}
-          onChange={handleCategoryChange}
-          includeReadyToAssign={!isTransfer}
-          placeholder={isTransfer ? "Budget category" : "Category"}
-          className={cn(CELL_FIELD, "w-full min-w-0 justify-start text-sm text-muted-foreground")}
+        <EditableCell
+          editing={editingField === "category"}
+          onStartEdit={() => setEditingField("category")}
+          ariaLabel={isTransfer ? "Budget category" : "Category"}
+          text={categoryText}
+          muted
+          editor={
+            <CategorySelect
+              groups={groups}
+              value={categoryId}
+              onChange={handleCategoryChange}
+              includeReadyToAssign={!isTransfer}
+              placeholder={isTransfer ? "Budget category" : "Category"}
+              defaultOpen
+              onOpenChange={(open) => {
+                if (!open) setEditingField(null);
+              }}
+              className={cn(CELL_FIELD, "w-full min-w-0 justify-start text-sm text-muted-foreground")}
+            />
+          }
         />
       )}
-      <Input
-        value={memo}
-        onChange={(e) => setMemo(e.currentTarget.value)}
-        onFocus={() => (focusedField.current = "memo")}
-        onBlur={() => {
-          focusedField.current = null;
-          if (skipNextCommit.current) {
-            skipNextCommit.current = false;
-            return;
-          }
-          commit();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          if (e.key === "Escape") {
-            skipNextCommit.current = true;
-            revertMemo();
-            e.currentTarget.blur();
-          }
-        }}
-        placeholder="Memo"
-        className={cn(CELL_FIELD, "text-sm text-muted-foreground")}
-        aria-label="Memo"
+      <EditableCell
+        editing={editingField === "memo"}
+        onStartEdit={() => setEditingField("memo")}
+        ariaLabel="Memo"
+        text={memo}
+        placeholder="add memo"
+        muted
+        editor={
+          <Input
+            autoFocus
+            value={memo}
+            onChange={(e) => setMemo(e.currentTarget.value)}
+            onFocus={(e) => {
+              focusedField.current = "memo";
+              e.currentTarget.select();
+            }}
+            onBlur={commitOnBlur}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                skipNextCommit.current = true;
+                revertMemo();
+                e.currentTarget.blur();
+              }
+            }}
+            placeholder="Memo"
+            className={cn(CELL_FIELD, "text-sm text-muted-foreground")}
+            aria-label="Memo"
+          />
+        }
       />
-      <Input
-        inputMode="decimal"
-        placeholder="Outflow"
-        value={amountFields.outflow}
-        onChange={(e) => setAmountFields({ outflow: e.currentTarget.value, inflow: "" })}
-        onFocus={() => (focusedField.current = "outflow")}
-        onBlur={() => {
-          focusedField.current = null;
-          if (skipNextCommit.current) {
-            skipNextCommit.current = false;
-            return;
-          }
-          commit();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          if (e.key === "Escape") {
-            skipNextCommit.current = true;
-            revertAmount();
-            e.currentTarget.blur();
-          }
-        }}
-        className={cn(CELL_FIELD, "text-right text-sm tabular-nums")}
-        aria-label="Outflow"
+      <EditableCell
+        editing={editingField === "outflow"}
+        onStartEdit={() => setEditingField("outflow")}
+        ariaLabel="Outflow"
+        text={amountFields.outflow}
+        align="right"
+        tabular
+        editor={
+          <Input
+            inputMode="decimal"
+            placeholder="Outflow"
+            autoFocus
+            value={amountFields.outflow}
+            onChange={(e) => setAmountFields({ outflow: e.currentTarget.value, inflow: "" })}
+            onFocus={(e) => {
+              focusedField.current = "outflow";
+              e.currentTarget.select();
+            }}
+            onBlur={commitOnBlur}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                skipNextCommit.current = true;
+                revertAmount();
+                e.currentTarget.blur();
+              }
+            }}
+            className={cn(CELL_FIELD, "text-right text-sm tabular-nums")}
+            aria-label="Outflow"
+          />
+        }
       />
-      <Input
-        inputMode="decimal"
-        placeholder="Inflow"
-        value={amountFields.inflow}
-        onChange={(e) => setAmountFields({ outflow: "", inflow: e.currentTarget.value })}
-        onFocus={() => (focusedField.current = "inflow")}
-        onBlur={() => {
-          focusedField.current = null;
-          if (skipNextCommit.current) {
-            skipNextCommit.current = false;
-            return;
-          }
-          commit();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          if (e.key === "Escape") {
-            skipNextCommit.current = true;
-            revertAmount();
-            e.currentTarget.blur();
-          }
-        }}
-        className={cn(CELL_FIELD, "text-right text-sm tabular-nums")}
-        aria-label="Inflow"
+      <EditableCell
+        editing={editingField === "inflow"}
+        onStartEdit={() => setEditingField("inflow")}
+        ariaLabel="Inflow"
+        text={amountFields.inflow}
+        align="right"
+        tabular
+        editor={
+          <Input
+            inputMode="decimal"
+            placeholder="Inflow"
+            autoFocus
+            value={amountFields.inflow}
+            onChange={(e) => setAmountFields({ outflow: "", inflow: e.currentTarget.value })}
+            onFocus={(e) => {
+              focusedField.current = "inflow";
+              e.currentTarget.select();
+            }}
+            onBlur={commitOnBlur}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") {
+                skipNextCommit.current = true;
+                revertAmount();
+                e.currentTarget.blur();
+              }
+            }}
+            className={cn(CELL_FIELD, "text-right text-sm tabular-nums")}
+            aria-label="Inflow"
+          />
+        }
       />
       <div className="flex items-center justify-center gap-1">
         <button

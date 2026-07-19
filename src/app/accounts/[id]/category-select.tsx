@@ -19,6 +19,8 @@ export function CategorySelect({
   includeReadyToAssign = false,
   placeholder = "Category",
   className,
+  defaultOpen,
+  onOpenChange,
 }: {
   groups: CategoryGroupOption[];
   value: number | null;
@@ -27,6 +29,9 @@ export function CategorySelect({
   includeReadyToAssign?: boolean;
   placeholder?: string;
   className?: string;
+  /** Open the popup as soon as this mounts — used to open-on-click-in-place. */
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   // Base UI's `Select.Value` only resolves a value to its label once the
   // popup has mounted at least once — otherwise it shows the raw value
@@ -44,6 +49,8 @@ export function CategorySelect({
       items={items}
       value={value == null ? (includeReadyToAssign ? "rta" : "") : String(value)}
       onValueChange={(v) => onChange(!v || v === "rta" ? null : Number(v))}
+      defaultOpen={defaultOpen}
+      onOpenChange={onOpenChange}
     >
       <SelectTrigger className={className}>
         <SelectValue placeholder={placeholder} />
