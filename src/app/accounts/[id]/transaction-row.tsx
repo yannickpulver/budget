@@ -18,7 +18,7 @@ import { REGISTER_GRID } from "./grid";
  * focus into a cell.
  */
 const CELL_FIELD =
-  "h-7 rounded-md border border-transparent bg-transparent px-1.5 shadow-none transition-colors hover:bg-muted focus-visible:bg-background focus-visible:border-ring";
+  "h-7 rounded-md border border-input bg-background px-1.5 shadow-none transition-colors hover:border-ring/50 focus-visible:border-ring";
 
 interface AmountFields {
   outflow: string;
