@@ -125,6 +125,20 @@ export const importBatches = sqliteTable("import_batches", {
   committedAt: text("committed_at").notNull(),
 });
 
+// Cache of downloaded favicons per distinct payee. Populated on demand by the
+// "Fetch payee icons" action (the register avatar falls back to the payee's
+// initial when there's no "ok" row). `domain` records which guessed domain
+// produced the icon; the icon bytes live on disk under data/payee-icons/,
+// keyed by a hash of the payee (see src/lib/payee-icons.ts). A "none" row
+// remembers a miss so it isn't re-fetched on every click.
+export const payeeIcons = sqliteTable("payee_icons", {
+  payee: text("payee").primaryKey(),
+  // The domain that produced the icon (e.g. "migros.ch"); null for misses.
+  domain: text("domain"),
+  status: text("status", { enum: ["ok", "none"] }).notNull(),
+  fetchedAt: text("fetched_at").notNull(), // ISO timestamp
+});
+
 // Per-row idempotency ledger for the Swissquote statement importer. Statement
 // rows carry a bank-issued reference number (or, for the few row types that
 // don't — fees, opening/closing balances — a derived composite key); this

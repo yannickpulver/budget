@@ -4,6 +4,7 @@ import { Plus } from "lucide-react";
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PayeeInput } from "@/components/payee-input";
 import { evaluateMoneyExpression } from "@/lib/currency";
 import type { CategoryGroupOption, TransferTarget } from "@/lib/queries";
 import { cn } from "@/lib/utils";
@@ -21,10 +22,12 @@ export function AddTransactionRow({
   accountId,
   groups,
   transferTargets,
+  payeeSuggestions,
 }: {
   accountId: number;
   groups: CategoryGroupOption[];
   transferTargets: TransferTarget[];
+  payeeSuggestions: string[];
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -110,11 +113,12 @@ export function AddTransactionRow({
           onChange={(e) => setDate(e.currentTarget.value)}
           className="h-7 text-xs"
         />
-        <Input
+        <PayeeInput
+          suggestions={payeeSuggestions}
           placeholder="Payee"
           value={payee}
-          onChange={(e) => setPayee(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && save()}
+          onValueChange={setPayee}
+          onEnter={() => save()}
           className="h-7 text-sm"
         />
         <CategoryTransferSelect

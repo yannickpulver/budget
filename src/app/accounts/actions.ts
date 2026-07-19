@@ -21,6 +21,7 @@ import {
   invalidateBudgetCache,
   type TransactionEditInput,
 } from "@/lib/queries";
+import { refreshPayeeIcons, type PayeeIconRefreshResult } from "@/lib/payee-icons";
 import { isValidNumber } from "@/lib/validation";
 // `refresh` lives here (not this file) because every export of a "use
 // server" module must itself be an async server action.
@@ -127,6 +128,21 @@ export async function deleteAccountAction(id: number): Promise<ActionResult> {
   revalidatePath("/", "layout");
   revalidatePath("/budget/[month]", "page");
   return { ok: true };
+}
+
+/**
+ * Downloads real favicons for the app's payees and caches them (see
+ * lib/payee-icons.ts) so the register avatars show them instead of initials.
+ * Reaches the network — like `refreshPricesAction`, this is user-triggered.
+ * `retryMisses` re-attempts payees that previously produced no icon.
+ */
+export async function refreshPayeeIconsAction(
+  accountId?: number,
+  retryMisses?: boolean
+): Promise<PayeeIconRefreshResult> {
+  const result = await refreshPayeeIcons(db, retryMisses ?? false);
+  refresh(accountId);
+  return result;
 }
 
 export interface TransactionFormInput {

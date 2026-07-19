@@ -3,6 +3,8 @@
 import { CircleCheck, Circle, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Input } from "@/components/ui/input";
+import { PayeeAvatar } from "@/components/payee-avatar";
+import { PayeeInput } from "@/components/payee-input";
 import type { AccountType } from "@/lib/budget-math";
 import { evaluateMoneyExpression, formatMoney } from "@/lib/currency";
 import type { AccountRef, CategoryGroupOption, RegisterRow } from "@/lib/queries";
@@ -136,12 +138,16 @@ export function TransactionRow({
   accountType,
   groups,
   accountsById,
+  payeeSuggestions,
+  iconUrl,
 }: {
   row: RegisterRow;
   accountId: number;
   accountType: AccountType;
   groups: CategoryGroupOption[];
   accountsById: Map<number, AccountRef>;
+  payeeSuggestions: string[];
+  iconUrl?: string;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -353,40 +359,57 @@ export function TransactionRow({
         }
       />
       {isTransfer ? (
-        <div className={cn(CELL_BOX, "flex min-w-0 items-center")} aria-label="Payee">
+        <div className={cn(CELL_BOX, "flex min-w-0 items-center gap-1.5")} aria-label="Payee">
+          <PayeeAvatar payee="" transfer />
           <span className="min-w-0 truncate">{displayPayee}</span>
         </div>
-      ) : (
-        <EditableCell
-          editing={editingField === "payee"}
-          onStartEdit={() => setEditingField("payee")}
-          ariaLabel="Payee"
-          text={payee}
-          placeholder="add payee"
-          editor={
-            <Input
-              autoFocus
-              value={payee}
-              onChange={(e) => setPayee(e.currentTarget.value)}
-              onFocus={(e) => {
-                focusedField.current = "payee";
-                e.currentTarget.select();
-              }}
-              onBlur={commitOnBlur}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.currentTarget.blur();
-                if (e.key === "Escape") {
-                  skipNextCommit.current = true;
-                  revertPayee();
-                  e.currentTarget.blur();
-                }
-              }}
-              placeholder="Payee"
-              className={cn(CELL_FIELD, "text-sm")}
-              aria-label="Payee"
-            />
-          }
+      ) : editingField === "payee" ? (
+        <PayeeInput
+          suggestions={payeeSuggestions}
+          autoFocus
+          value={payee}
+          onValueChange={setPayee}
+          onFocus={(e) => {
+            focusedField.current = "payee";
+            e.currentTarget.select();
+          }}
+          onBlur={commitOnBlur}
+          onEnter={(e) => e.currentTarget.blur()}
+          onEscape={(e) => {
+            skipNextCommit.current = true;
+            revertPayee();
+            e.currentTarget.blur();
+          }}
+          placeholder="Payee"
+          className={cn(CELL_FIELD, "text-sm")}
+          aria-label="Payee"
         />
+      ) : (
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Payee"
+          onClick={() => setEditingField("payee")}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              setEditingField("payee");
+            }
+          }}
+          className={cn(
+            CELL_BOX,
+            "flex min-w-0 cursor-default items-center gap-1.5 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          )}
+        >
+          <PayeeAvatar payee={payee} iconUrl={iconUrl} />
+          {payee === "" ? (
+            <span className="min-w-0 truncate text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100">
+              add payee
+            </span>
+          ) : (
+            <span className="min-w-0 truncate">{payee}</span>
+          )}
+        </div>
       )}
       {isTransfer && !linkedCategoryEditable ? (
         <div className={cn(CELL_BOX, "flex min-w-0 items-center text-muted-foreground")}>

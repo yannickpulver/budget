@@ -1,5 +1,6 @@
 "use client";
 
+import { ImageDown } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +13,7 @@ import { cn } from "@/lib/utils";
 import {
   closeAccountAction,
   deleteAccountAction,
+  refreshPayeeIconsAction,
   renameAccountAction,
   reopenAccountAction,
   updateAccountTypeAction,
@@ -42,6 +44,16 @@ export function AccountHeader({ detail }: { detail: AccountDetail }) {
   const [error, setError] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState(detail.name);
+  const [iconsPending, startIconsTransition] = useTransition();
+  const [iconsNotice, setIconsNotice] = useState<string | null>(null);
+
+  function fetchPayeeIcons() {
+    setIconsNotice(null);
+    startIconsTransition(async () => {
+      const result = await refreshPayeeIconsAction(detail.id);
+      setIconsNotice(`${result.fetched} added, ${result.missed} missed, ${result.skipped} skipped.`);
+    });
+  }
 
   function saveName() {
     setEditingName(false);
@@ -173,6 +185,10 @@ export function AccountHeader({ detail }: { detail: AccountDetail }) {
             )}
           </div>
           <div className="flex gap-1.5">
+            <Button size="sm" variant="outline" onClick={fetchPayeeIcons} disabled={iconsPending}>
+              <ImageDown className={cn("size-3.5", iconsPending && "animate-spin")} />
+              Fetch payee icons
+            </Button>
             <ImportCsvDialog accountId={detail.id} currency={detail.currency} />
             {detail.type === "tracking" && (
               <ImportStatementDialog accountId={detail.id} currency={detail.currency} />
@@ -196,6 +212,7 @@ export function AccountHeader({ detail }: { detail: AccountDetail }) {
               </Button>
             )}
           </div>
+          {iconsNotice && <p className="text-xs text-muted-foreground">{iconsNotice}</p>}
         </div>
       </div>
     </header>
