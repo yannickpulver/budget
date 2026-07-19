@@ -93,4 +93,45 @@ describe("fresh database bootstrap", () => {
 
     sqlite.close();
   });
+
+  it("giftcard accounts get their own sidebar section but stay folded into the Budget/net-worth totals", async () => {
+    const { db, sqlite } = await import("@/db");
+    const { createAccount, getSidebarData } = await import("@/lib/queries");
+
+    const checkingId = createAccount(db, {
+      name: "Checking",
+      type: "checking",
+      startingBalance: 100000,
+      date: "2026-01-01",
+    });
+    const giftcardId = createAccount(db, {
+      name: "Amazon Giftcard",
+      type: "giftcard",
+      startingBalance: 5000,
+      date: "2026-01-01",
+    });
+
+    const sidebar = getSidebarData(db);
+
+    // Own compact section, not mixed into the plain Budget list.
+    expect(sidebar.budget.map((a) => a.id)).toEqual([checkingId]);
+    expect(sidebar.giftcards.map((a) => a.id)).toEqual([giftcardId]);
+    expect(sidebar.giftcardsTotal).toBe(5000);
+
+    // Still on-budget funds: counted in the Budget subtotal and net worth.
+    expect(sidebar.budgetTotal).toBe(105000);
+    expect(sidebar.netWorth).toBe(105000);
+
+    sqlite.close();
+  });
+
+  it("omits the giftcards section entirely when no giftcard account exists", async () => {
+    const { db, sqlite } = await import("@/db");
+    const { createAccount, getSidebarData } = await import("@/lib/queries");
+
+    createAccount(db, { name: "Checking", type: "checking", startingBalance: 0, date: "2026-01-01" });
+
+    expect(getSidebarData(db).giftcards).toEqual([]);
+    sqlite.close();
+  });
 });

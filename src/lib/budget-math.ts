@@ -5,7 +5,7 @@
  * Amounts are integers in minor currency units (Rappen), +inflow / -outflow.
  */
 
-export type AccountType = "checking" | "savings" | "cash" | "credit" | "tracking";
+export type AccountType = "checking" | "savings" | "cash" | "credit" | "giftcard" | "tracking";
 
 export interface AccountInfo {
   id: number;

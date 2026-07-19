@@ -14,6 +14,7 @@ const CHECKING = 1;
 const CREDIT = 2;
 const TRACKING = 3;
 const SAVINGS = 4;
+const GIFTCARD = 5;
 
 const GROCERIES = 100;
 const RENT = 101;
@@ -25,6 +26,7 @@ function accountsMap(overrides: Record<number, AccountInfo> = {}): Map<number, A
     [CREDIT]: { id: CREDIT, type: "credit", paymentCategoryId: PAYMENT_CAT },
     [TRACKING]: { id: TRACKING, type: "tracking", paymentCategoryId: null },
     [SAVINGS]: { id: SAVINGS, type: "savings", paymentCategoryId: null },
+    [GIFTCARD]: { id: GIFTCARD, type: "giftcard", paymentCategoryId: null },
     ...overrides,
   };
   return new Map(Object.entries(base).map(([id, info]) => [Number(id), info]));
@@ -220,6 +222,52 @@ describe("transfers excluded from activity", () => {
       accounts
     );
     expect(month.readyToAssign).toBe(-20000);
+  });
+});
+
+describe("giftcard accounts are on-budget", () => {
+  it("categorized spend on a giftcard counts as normal category activity", () => {
+    const accounts = accountsMap();
+    const activity = computeCategoryActivity(
+      [{ accountId: GIFTCARD, categoryId: GROCERIES, amount: -3000 }],
+      accounts
+    );
+    expect(activity.get(GROCERIES)).toBe(-3000);
+  });
+
+  it("counts toward on-budget funds like a checking account", () => {
+    const accounts = accountsMap();
+    const [month] = walkMonths(
+      [
+        {
+          assignedByCategory: new Map(),
+          // Receiving a giftcard as a present: uncategorized inflow -> RTA.
+          transactions: [{ accountId: GIFTCARD, categoryId: null, amount: 5000 }],
+        },
+      ],
+      [GROCERIES],
+      accounts
+    );
+    expect(month.readyToAssign).toBe(5000);
+    expect(month.cumulativeOnBudgetFunds).toBe(5000);
+  });
+
+  it("a transfer between checking and a giftcard (topping it up) nets to zero on readyToAssign", () => {
+    const accounts = accountsMap();
+    const [month] = walkMonths(
+      [
+        {
+          assignedByCategory: new Map(),
+          transactions: [
+            { accountId: CHECKING, categoryId: null, amount: -10000 },
+            { accountId: GIFTCARD, categoryId: null, amount: 10000 },
+          ],
+        },
+      ],
+      [GROCERIES],
+      accounts
+    );
+    expect(month.readyToAssign).toBe(0);
   });
 });
 

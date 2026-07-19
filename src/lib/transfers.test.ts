@@ -71,6 +71,7 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 const CHECKING = 1;
 const SAVINGS = 2;
 const TRACKING = 3;
+const GIFTCARD = 4;
 
 const INVESTING = 10;
 
@@ -80,7 +81,8 @@ function seed() {
     INSERT INTO accounts (id, name, type) VALUES
       (${CHECKING}, 'Checking', 'checking'),
       (${SAVINGS}, 'Savings', 'savings'),
-      (${TRACKING}, 'Brokerage', 'tracking');
+      (${TRACKING}, 'Brokerage', 'tracking'),
+      (${GIFTCARD}, 'Amazon Giftcard', 'giftcard');
     INSERT INTO category_groups (id, name) VALUES (1, 'Saving');
     INSERT INTO categories (id, group_id, name) VALUES (${INVESTING}, 1, 'Investing');
   `);
@@ -177,6 +179,42 @@ describe("createTransfer", () => {
 
     const rows = allTransactions();
     expect(rows.every((r) => r.category_id === null)).toBe(true);
+  });
+
+  it("topping up a giftcard from checking (both on-budget) carries no category on either leg", () => {
+    const dbi = makeDb();
+    createTransfer(dbi, {
+      fromAccountId: CHECKING,
+      toAccountId: GIFTCARD,
+      date: "2025-03-01",
+      amount: 5000,
+      memo: "",
+      cleared: false,
+      categoryId: INVESTING,
+    });
+
+    const rows = allTransactions();
+    expect(rows.every((r) => r.category_id === null)).toBe(true);
+  });
+
+  it("categorizes only the giftcard leg when the other side is a tracking account", () => {
+    const dbi = makeDb();
+    createTransfer(dbi, {
+      fromAccountId: GIFTCARD,
+      toAccountId: TRACKING,
+      date: "2025-03-01",
+      amount: 2500,
+      memo: "",
+      cleared: false,
+      categoryId: INVESTING,
+    });
+
+    const rows = allTransactions();
+    const from = rows.find((r) => r.account_id === GIFTCARD)!;
+    const to = rows.find((r) => r.account_id === TRACKING)!;
+
+    expect(from.category_id).toBe(INVESTING);
+    expect(to.category_id).toBeNull();
   });
 });
 
