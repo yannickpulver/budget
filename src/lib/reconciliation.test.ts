@@ -3,7 +3,11 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as schema from "@/db/schema";
 import { adjustAssignment, loadBudgetData, SnapshotStore } from "./queries";
-import { computePaymentCategoryAdjustments } from "./reconciliation";
+import {
+  computePaymentCategoryAdjustments,
+  computePaymentCategoryAdjustmentsAllMonths,
+} from "./reconciliation";
+import type { AccountInfo, TxnInput } from "./budget-math";
 import type { CreditCardLink, PlanAvailableEntry } from "./ynab-import";
 
 /**
@@ -190,6 +194,115 @@ describe("payment category reconciliation", () => {
       planAvailable: [],
       ourAvailableAtMonth: new Map([[CARD_PAYMENT, 20000]]),
       month: MONTH,
+    });
+
+    expect(adjustments).toHaveLength(0);
+  });
+});
+
+describe("per-month payment category reconciliation", () => {
+  // Pure-data fixture (no DB): a credit card whose purchases feed a payment
+  // category with phantom Available every month, plus YNAB's ground-truth
+  // Plan.csv Available per month.
+  const CHECKING_ACC = 1;
+  const CREDIT_ACC = 2;
+  const GROCERIES_CAT = 50;
+  const PAYMENT_CAT = 100;
+
+  const accounts = new Map<number, AccountInfo>([
+    [CHECKING_ACC, { id: CHECKING_ACC, type: "checking", paymentCategoryId: null }],
+    [CREDIT_ACC, { id: CREDIT_ACC, type: "credit", paymentCategoryId: PAYMENT_CAT }],
+  ]);
+  const categoryIds = [GROCERIES_CAT, PAYMENT_CAT];
+  const creditCardLinks: CreditCardLink[] = [
+    { accountName: "CC", paymentGroupName: "Credit Card Payments", paymentCategoryName: "CC" },
+  ];
+  const categoryIdByKey = new Map<string, number>([["Credit Card Payments::CC", PAYMENT_CAT]]);
+
+  /** A card purchase: feeds Groceries activity and (immediate funding) the payment category. */
+  function purchase(amount: number): TxnInput {
+    return { accountId: CREDIT_ACC, categoryId: GROCERIES_CAT, amount };
+  }
+
+  function planEntry(month: string, available: number): PlanAvailableEntry {
+    return {
+      month,
+      groupName: "Credit Card Payments",
+      categoryName: "CC",
+      assigned: 0,
+      activity: 0,
+      available,
+    };
+  }
+
+  it("snaps the payment category to Plan.csv at every month, carrying corrections forward", () => {
+    const txnsByMonth = new Map<string, TxnInput[]>([
+      ["2025-01", [purchase(-20000)]],
+      ["2025-02", [purchase(-10000)]],
+    ]);
+    const planAvailable = [planEntry("2025-01", 5000), planEntry("2025-02", 3000)];
+
+    const adjustments = computePaymentCategoryAdjustmentsAllMonths({
+      months: ["2025-01", "2025-02"],
+      categoryIds,
+      accounts,
+      assignmentByKey: new Map(),
+      txnsByMonth,
+      creditCardLinks,
+      categoryIdByKey,
+      planAvailable,
+    });
+
+    // Month 1: our Available is the phantom 20000, plan says 5000 → -15000.
+    // Month 2: carry-in is the snapped 5000, +10000 new activity = 15000,
+    // plan says 3000 → -12000 (proves the correction carried forward).
+    expect(adjustments).toEqual([
+      expect.objectContaining({ month: "2025-01", categoryId: PAYMENT_CAT, delta: -15000 }),
+      expect.objectContaining({ month: "2025-02", categoryId: PAYMENT_CAT, delta: -12000 }),
+    ]);
+  });
+
+  it("reproduces a negative Plan.csv Available and carries it forward as a zero clamp", () => {
+    const txnsByMonth = new Map<string, TxnInput[]>([
+      ["2025-01", [purchase(-20000)]],
+      ["2025-02", [purchase(-10000)]],
+    ]);
+    // YNAB emits negative Available for payment categories (overspent card).
+    const planAvailable = [planEntry("2025-01", -5000), planEntry("2025-02", 2000)];
+
+    const adjustments = computePaymentCategoryAdjustmentsAllMonths({
+      months: ["2025-01", "2025-02"],
+      categoryIds,
+      accounts,
+      assignmentByKey: new Map(),
+      txnsByMonth,
+      creditCardLinks,
+      categoryIdByKey,
+      planAvailable,
+    });
+
+    // Month 1: 20000 → -5000 requires -25000.
+    // Month 2: carry-in clamps max(0, -5000) = 0, +10000 activity = 10000,
+    // plan says 2000 → -8000.
+    expect(adjustments).toEqual([
+      expect.objectContaining({ month: "2025-01", delta: -25000 }),
+      expect.objectContaining({ month: "2025-02", delta: -8000 }),
+    ]);
+  });
+
+  it("emits no adjustment for a month whose Available already matches Plan.csv", () => {
+    const txnsByMonth = new Map<string, TxnInput[]>([["2025-01", [purchase(-20000)]]]);
+    const planAvailable = [planEntry("2025-01", 20000)];
+
+    const adjustments = computePaymentCategoryAdjustmentsAllMonths({
+      months: ["2025-01"],
+      categoryIds,
+      accounts,
+      assignmentByKey: new Map(),
+      txnsByMonth,
+      creditCardLinks,
+      categoryIdByKey,
+      planAvailable,
     });
 
     expect(adjustments).toHaveLength(0);
