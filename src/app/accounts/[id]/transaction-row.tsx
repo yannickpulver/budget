@@ -4,7 +4,7 @@ import { CircleCheck, Circle, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Input } from "@/components/ui/input";
 import type { AccountType } from "@/lib/budget-math";
-import { formatMoney, parseMoneyInput } from "@/lib/currency";
+import { evaluateMoneyExpression, formatMoney } from "@/lib/currency";
 import type { AccountRef, CategoryGroupOption, RegisterRow } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { deleteTransactionAction, toggleClearedAction, updateTransactionAction } from "../actions";
@@ -38,11 +38,11 @@ function amountToFields(amount: number): AmountFields {
 
 function fieldsToAmount(fields: AmountFields): number | null {
   if (fields.outflow.trim() !== "") {
-    const parsed = parseMoneyInput(fields.outflow);
+    const parsed = evaluateMoneyExpression(fields.outflow);
     return parsed == null ? null : -Math.abs(parsed);
   }
   if (fields.inflow.trim() !== "") {
-    const parsed = parseMoneyInput(fields.inflow);
+    const parsed = evaluateMoneyExpression(fields.inflow);
     return parsed == null ? null : Math.abs(parsed);
   }
   return 0; // both empty — caller rejects 0 on commit

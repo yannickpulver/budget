@@ -5,7 +5,7 @@ import { useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
-import { formatMoney, parseMoneyInput } from "@/lib/currency";
+import { evaluateMoneyExpression, formatMoney } from "@/lib/currency";
 import { setAccountBalanceAction } from "../actions";
 
 /**
@@ -28,7 +28,7 @@ export function SetBalancePopover({ accountId, balance }: { accountId: number; b
   }
 
   function save() {
-    const parsed = parseMoneyInput(value);
+    const parsed = evaluateMoneyExpression(value);
     if (parsed == null) {
       setError("Not a valid amount.");
       return;

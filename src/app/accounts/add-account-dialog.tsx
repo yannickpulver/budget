@@ -17,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { AccountType } from "@/lib/budget-math";
-import { parseMoneyInput } from "@/lib/currency";
+import { evaluateMoneyExpression } from "@/lib/currency";
 import { createAccountAction } from "./actions";
 
 const TYPE_OPTIONS: Array<{ value: AccountType; label: string }> = [
@@ -54,7 +54,7 @@ export function AddAccountDialog() {
       setError("Name is required.");
       return;
     }
-    const parsedBalance = startingBalance.trim() === "" ? 0 : parseMoneyInput(startingBalance);
+    const parsedBalance = startingBalance.trim() === "" ? 0 : evaluateMoneyExpression(startingBalance);
     if (parsedBalance == null) {
       setError("Starting balance is not a valid amount.");
       return;

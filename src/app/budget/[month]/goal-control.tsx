@@ -3,7 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { Check, Target } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatMoney, parseMoneyInput } from "@/lib/currency";
+import { evaluateMoneyExpression, formatMoney } from "@/lib/currency";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -41,7 +41,7 @@ export function GoalControl({
   }
 
   function save() {
-    const parsed = parseMoneyInput(value);
+    const parsed = evaluateMoneyExpression(value);
     setOpen(false);
     startTransition(() => setMonthlyTarget(categoryId, parsed));
   }

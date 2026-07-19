@@ -38,6 +38,141 @@ export function parseMoneyInput(raw: string): number | null {
   return Math.round(Number(cleaned) * 100);
 }
 
+type Token = { kind: "num"; value: number } | { kind: "op"; value: "+" | "-" | "*" | "/" } | { kind: "paren"; value: "(" | ")" };
+
+/** Tokenize a Swiss-formatted arithmetic expression. Returns null on any unrecognized character. */
+function tokenize(cleaned: string): Token[] | null {
+  const tokens: Token[] = [];
+  let i = 0;
+  while (i < cleaned.length) {
+    const ch = cleaned[i];
+    if (ch === "+" || ch === "-" || ch === "*" || ch === "/") {
+      tokens.push({ kind: "op", value: ch });
+      i++;
+    } else if (ch === "(" || ch === ")") {
+      tokens.push({ kind: "paren", value: ch });
+      i++;
+    } else if (/\d/.test(ch)) {
+      let j = i + 1;
+      while (j < cleaned.length && /[\d.]/.test(cleaned[j])) j++;
+      const text = cleaned.slice(i, j);
+      if (!/^\d+(\.\d{1,2})?$/.test(text)) return null;
+      tokens.push({ kind: "num", value: Number(text) });
+      i = j;
+    } else {
+      return null;
+    }
+  }
+  return tokens;
+}
+
+/**
+ * Recursive-descent parser/evaluator over the token stream. Grammar:
+ *   expr   := term (('+' | '-') term)*
+ *   term   := unary (('*' | '/') unary)*
+ *   unary  := '-' unary | atom
+ *   atom   := number | '(' expr ')'
+ * Returns null on malformed input, non-finite results, or division by zero.
+ */
+function evaluateTokens(tokens: Token[]): number | null {
+  let pos = 0;
+
+  function peek(): Token | undefined {
+    return tokens[pos];
+  }
+
+  function parseAtom(): number | null {
+    const tok = peek();
+    if (!tok) return null;
+    if (tok.kind === "num") {
+      pos++;
+      return tok.value;
+    }
+    if (tok.kind === "paren" && tok.value === "(") {
+      pos++;
+      const value = parseExpr();
+      if (value == null) return null;
+      const close = peek();
+      if (!close || close.kind !== "paren" || close.value !== ")") return null;
+      pos++;
+      return value;
+    }
+    return null;
+  }
+
+  function parseUnary(): number | null {
+    const tok = peek();
+    if (tok && tok.kind === "op" && tok.value === "-") {
+      pos++;
+      const value = parseUnary();
+      return value == null ? null : -value;
+    }
+    if (tok && tok.kind === "op" && tok.value === "+") {
+      pos++;
+      return parseUnary();
+    }
+    return parseAtom();
+  }
+
+  function parseTerm(): number | null {
+    let value = parseUnary();
+    if (value == null) return null;
+    for (;;) {
+      const tok = peek();
+      if (!tok || tok.kind !== "op" || (tok.value !== "*" && tok.value !== "/")) break;
+      pos++;
+      const rhs = parseUnary();
+      if (rhs == null) return null;
+      if (tok.value === "*") {
+        value = value * rhs;
+      } else {
+        if (rhs === 0) return null;
+        value = value / rhs;
+      }
+    }
+    return value;
+  }
+
+  function parseExpr(): number | null {
+    let value = parseTerm();
+    if (value == null) return null;
+    for (;;) {
+      const tok = peek();
+      if (!tok || tok.kind !== "op" || (tok.value !== "+" && tok.value !== "-")) break;
+      pos++;
+      const rhs = parseTerm();
+      if (rhs == null) return null;
+      value = tok.value === "+" ? value + rhs : value - rhs;
+    }
+    return value;
+  }
+
+  const result = parseExpr();
+  if (result == null || pos !== tokens.length || !Number.isFinite(result)) return null;
+  return result;
+}
+
+/**
+ * Evaluate a money expression: a plain number or a small arithmetic
+ * expression over Swiss-formatted numbers, e.g. "200+20", "1'200+50",
+ * "3*33.30". Supports + - * / with standard precedence, optional
+ * parentheses, unary minus, and apostrophe/space thousands separators.
+ * Result is rounded to minor units the same way as `parseMoneyInput`.
+ * Returns null for anything malformed, division by zero, or non-finite. A
+ * plain number behaves exactly like `parseMoneyInput`.
+ */
+export function evaluateMoneyExpression(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const cleaned = trimmed.replace(/['\s]/g, "");
+  if (!/^[-+*/().\d]+$/.test(cleaned)) return null;
+  const tokens = tokenize(cleaned);
+  if (!tokens || tokens.length === 0) return null;
+  const result = evaluateTokens(tokens);
+  if (result == null) return null;
+  return Math.round(result * 100);
+}
+
 /**
  * Parse a holding quantity: a positive decimal, arbitrary precision (for
  * fractional shares). Accepts a comma as the decimal separator. Returns null
