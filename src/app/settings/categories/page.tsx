@@ -24,9 +24,10 @@ export default function CategoriesSettingsPage() {
         <div>
           <h1 className="text-sm font-semibold">Categories</h1>
           <p className="text-xs text-muted-foreground">
-            Create, rename, and hide category groups and categories. Hidden categories stay in
-            your budget history but drop off the budget view and new transactions. Only unused
-            groups/categories can be deleted outright.
+            Create, rename, hide, and drag to reorder category groups and categories — use the
+            &ldquo;Move to…&rdquo; select to move a category into another group. Hidden categories
+            stay in your budget history but drop off the budget view and new transactions. Only
+            unused groups/categories can be deleted outright.
           </p>
         </div>
       </header>

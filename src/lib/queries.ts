@@ -830,6 +830,15 @@ export function deleteCategoryGroup(dbi: DB, id: number): SettingsResult {
   return { ok: true };
 }
 
+/** Reindex every group's `sort` to its position in `orderedGroupIds` (0..n), in one transaction. */
+export function reorderCategoryGroups(dbi: DB, orderedGroupIds: number[]): void {
+  dbi.transaction((tx) => {
+    orderedGroupIds.forEach((id, sort) => {
+      tx.update(schema.categoryGroups).set({ sort }).where(eq(schema.categoryGroups.id, id)).run();
+    });
+  });
+}
+
 export function createCategory(dbi: DB, groupId: number, name: string): number {
   const maxSort = dbi
     .select({ maxSort: sql<number | null>`max(${schema.categories.sort})` })
@@ -880,6 +889,31 @@ export function deleteCategory(dbi: DB, id: number): SettingsResult {
   }
   dbi.delete(schema.categories).where(eq(schema.categories.id, id)).run();
   return { ok: true };
+}
+
+/**
+ * Reindex `orderedCategoryIds` to `groupId` with `sort` 0..n, in one
+ * transaction. Also doubles as "move category to another group": pass the
+ * target group's full resulting id list (including the moved category) and
+ * every row's `groupId` is set to match, moving it in the same write.
+ */
+export function reorderCategories(dbi: DB, groupId: number, orderedCategoryIds: number[]): void {
+  dbi.transaction((tx) => {
+    orderedCategoryIds.forEach((id, sort) => {
+      tx.update(schema.categories).set({ sort, groupId }).where(eq(schema.categories.id, id)).run();
+    });
+  });
+}
+
+/** Move a category to another group, appended at the end (its old group's sort values are left as-is — deliberately not reindexed, since gaps don't affect ordering). */
+export function moveCategoryToGroup(dbi: DB, id: number, groupId: number): void {
+  const maxSort = dbi
+    .select({ maxSort: sql<number | null>`max(${schema.categories.sort})` })
+    .from(schema.categories)
+    .where(eq(schema.categories.groupId, groupId))
+    .get();
+  const sort = (maxSort?.maxSort ?? -1) + 1;
+  dbi.update(schema.categories).set({ groupId, sort }).where(eq(schema.categories.id, id)).run();
 }
 
 export interface AccountRef {
