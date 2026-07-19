@@ -28,8 +28,20 @@ export function CategorySelect({
   placeholder?: string;
   className?: string;
 }) {
+  // Base UI's `Select.Value` only resolves a value to its label once the
+  // popup has mounted at least once — otherwise it shows the raw value
+  // (e.g. a numeric category id). Passing `items` lets it resolve the label
+  // up front, so the trigger shows the category name immediately.
+  const items = [
+    ...(includeReadyToAssign ? [{ value: "rta", label: "Ready to Assign" }] : []),
+    ...groups.flatMap((group) =>
+      group.categories.map((category) => ({ value: String(category.id), label: category.name }))
+    ),
+  ];
+
   return (
     <Select
+      items={items}
       value={value == null ? (includeReadyToAssign ? "rta" : "") : String(value)}
       onValueChange={(v) => onChange(!v || v === "rta" ? null : Number(v))}
     >
