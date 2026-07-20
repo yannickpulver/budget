@@ -1,0 +1,1 @@
+ALTER TABLE `accounts` ADD `linked_category_id` integer REFERENCES categories(id);

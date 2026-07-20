@@ -19,6 +19,12 @@ export const accounts = sqliteTable("accounts", {
   paymentCategoryId: integer("payment_category_id").references(
     (): typeof categories.id => categories.id
   ),
+  // For type "giftcard": the account's own budget category (auto-created with
+  // the account). New transactions on the account default their category to
+  // it, and its starting balance is assigned there. Null for other types.
+  linkedCategoryId: integer("linked_category_id").references(
+    (): typeof categories.id => categories.id
+  ),
   // Optional emoji override (1-2 chars, free text) shown instead of the
   // type's default lucide icon. Null = use the type default.
   icon: text("icon"),
@@ -77,6 +83,11 @@ export const assignments = sqliteTable(
       .notNull()
       .references(() => categories.id),
     amount: integer("amount").notNull().default(0), // Rappen
+    // Set true when the user funds this category's monthly goal via the "Fund"
+    // button. Marks the goal met for the month regardless of later spend or
+    // reallocation out — so pulling money out then adding one month's target
+    // still counts as done. Resets each month (new row defaults to false).
+    goalFunded: integer("goal_funded", { mode: "boolean" }).notNull().default(false),
   },
   (table) => [primaryKey({ columns: [table.month, table.categoryId] })]
 );
