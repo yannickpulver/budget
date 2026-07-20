@@ -125,6 +125,100 @@ describe("fresh database bootstrap", () => {
     sqlite.close();
   });
 
+  it("creating a giftcard auto-adds a matching budget category with its balance assigned, leaving RTA unchanged", async () => {
+    const { db, sqlite } = await import("@/db");
+    const { createAccount, getAccountDetail, getBudgetView } = await import("@/lib/queries");
+
+    createAccount(db, { name: "Checking", type: "checking", startingBalance: 100000, date: "2026-01-01" });
+    const giftcardId = createAccount(db, {
+      name: "Amazon Giftcard",
+      type: "giftcard",
+      startingBalance: 5000,
+      date: "2026-01-01",
+    });
+
+    const view = getBudgetView("2026-01");
+
+    const giftcardGroup = view.groups.find((g) => g.name === "Giftcards");
+    expect(giftcardGroup).toBeDefined();
+    const giftcardCategory = giftcardGroup?.categories.find((c) => c.name === "Amazon Giftcard");
+    expect(giftcardCategory).toBeDefined();
+
+    // Starting balance moved out of Ready to Assign and into the category.
+    expect(giftcardCategory?.assigned).toBe(5000);
+    expect(giftcardCategory?.available).toBe(5000);
+
+    // RTA reflects only the checking inflow — the giftcard's inflow and its
+    // assignment cancel out.
+    expect(view.readyToAssign).toBe(100000);
+
+    // The account is linked to its category so new spend defaults there.
+    expect(getAccountDetail(giftcardId, db)?.linkedCategoryId).toBe(giftcardCategory?.id);
+
+    sqlite.close();
+  });
+
+  it("converting an existing account to a giftcard creates and links its category, assigning the current balance", async () => {
+    const { db, sqlite } = await import("@/db");
+    const { createAccount, setAccountType, getAccountDetail, getBudgetView, currentMonth } = await import(
+      "@/lib/queries"
+    );
+
+    const id = createAccount(db, { name: "Cash Card", type: "cash", startingBalance: 3000, date: "2026-01-01" });
+    expect(getAccountDetail(id, db)?.linkedCategoryId).toBeNull();
+
+    setAccountType(db, id, "giftcard");
+
+    const linkedId = getAccountDetail(id, db)?.linkedCategoryId;
+    expect(linkedId).not.toBeNull();
+
+    const view = getBudgetView(currentMonth());
+    const giftcardGroup = view.groups.find((g) => g.name === "Giftcards");
+    const category = giftcardGroup?.categories.find((c) => c.id === linkedId);
+    expect(category?.name).toBe("Cash Card");
+    expect(category?.assigned).toBe(3000);
+
+    sqlite.close();
+  });
+
+  it("converting to giftcard is idempotent — an already-linked account keeps its single category", async () => {
+    const { db, sqlite } = await import("@/db");
+    const { createAccount, setAccountType, getAccountDetail, getBudgetView } = await import("@/lib/queries");
+
+    const id = createAccount(db, { name: "Voucher", type: "giftcard", startingBalance: 1000, date: "2026-01-01" });
+    const originalLinked = getAccountDetail(id, db)?.linkedCategoryId;
+
+    // Flip away and back — must reuse the existing category, not spawn a second.
+    setAccountType(db, id, "cash");
+    setAccountType(db, id, "giftcard");
+
+    expect(getAccountDetail(id, db)?.linkedCategoryId).toBe(originalLinked);
+    const giftcardGroup = getBudgetView("2026-01").groups.find((g) => g.name === "Giftcards");
+    expect(giftcardGroup?.categories.filter((c) => c.name === "Voucher")).toHaveLength(1);
+
+    sqlite.close();
+  });
+
+  it("files every giftcard under one shared Giftcards group and skips assignment for a zero balance", async () => {
+    const { db, sqlite } = await import("@/db");
+    const { createAccount, getBudgetView } = await import("@/lib/queries");
+
+    createAccount(db, { name: "Amazon", type: "giftcard", startingBalance: 5000, date: "2026-01-01" });
+    createAccount(db, { name: "Apple", type: "giftcard", startingBalance: 0, date: "2026-01-01" });
+
+    const view = getBudgetView("2026-01");
+    const giftcardGroups = view.groups.filter((g) => g.name === "Giftcards");
+    expect(giftcardGroups).toHaveLength(1);
+    expect(giftcardGroups[0].categories.map((c) => c.name)).toEqual(
+      expect.arrayContaining(["Amazon", "Apple"])
+    );
+
+    const apple = giftcardGroups[0].categories.find((c) => c.name === "Apple");
+    expect(apple?.assigned).toBe(0);
+
+    sqlite.close();
+  });
+
   it("omits the giftcards section entirely when no giftcard account exists", async () => {
     const { db, sqlite } = await import("@/db");
     const { createAccount, getSidebarData } = await import("@/lib/queries");
@@ -132,6 +226,49 @@ describe("fresh database bootstrap", () => {
     createAccount(db, { name: "Checking", type: "checking", startingBalance: 0, date: "2026-01-01" });
 
     expect(getSidebarData(db).giftcards).toEqual([]);
+    sqlite.close();
+  });
+
+  it("a monthly goal shows only the capped target as 'to go' after money is pulled out", async () => {
+    const { db, sqlite } = await import("@/db");
+    const { createAccount, getBudgetView } = await import("@/lib/queries");
+    const schema = await import("@/db/schema");
+    const { eq } = await import("drizzle-orm");
+
+    createAccount(db, { name: "Checking", type: "checking", startingBalance: 1000000, date: "2026-01-01" });
+    const cat = db.select().from(schema.categories).all()[0];
+    db.update(schema.categories).set({ monthlyTarget: 50000 }).where(eq(schema.categories.id, cat.id)).run();
+    // Pulled 955 out this month (assigned -955), goal not yet funded.
+    db.insert(schema.assignments)
+      .values({ month: "2026-01", categoryId: cat.id, amount: -95500, goalFunded: false })
+      .run();
+
+    const found = getBudgetView("2026-01").groups.flatMap((g) => g.categories).find((c) => c.id === cat.id);
+    // Capped at the 500 target, not 500 + the 955 pulled out.
+    expect(found?.assigned).toBe(-95500);
+    expect(found?.goal).toEqual({ met: false, remaining: 50000 });
+
+    sqlite.close();
+  });
+
+  it("a monthly goal funded this month reads as met even when net assigned is still negative", async () => {
+    const { db, sqlite } = await import("@/db");
+    const { createAccount, getBudgetView } = await import("@/lib/queries");
+    const schema = await import("@/db/schema");
+    const { eq } = await import("drizzle-orm");
+
+    createAccount(db, { name: "Checking", type: "checking", startingBalance: 1000000, date: "2026-01-01" });
+    const cat = db.select().from(schema.categories).all()[0];
+    db.update(schema.categories).set({ monthlyTarget: 50000 }).where(eq(schema.categories.id, cat.id)).run();
+    // Pulled 955 out then funded one month's 500 → net -455, marked funded.
+    db.insert(schema.assignments)
+      .values({ month: "2026-01", categoryId: cat.id, amount: -45500, goalFunded: true })
+      .run();
+
+    const found = getBudgetView("2026-01").groups.flatMap((g) => g.categories).find((c) => c.id === cat.id);
+    expect(found?.assigned).toBe(-45500);
+    expect(found?.goal).toEqual({ met: true, remaining: 0 });
+
     sqlite.close();
   });
 

@@ -89,6 +89,7 @@ export default async function AccountPage({
               groups={groups}
               transferTargets={transferTargets}
               payeeSuggestions={payeeSuggestions}
+              defaultCategoryId={detail.type === "giftcard" ? detail.linkedCategoryId : null}
             />
           </div>
 

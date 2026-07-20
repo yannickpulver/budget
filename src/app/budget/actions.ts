@@ -1,8 +1,9 @@
 "use server";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
+import { computeGoalStatus } from "@/lib/budget-math";
 import { adjustAssignment } from "@/lib/queries";
 import { withUndoStep } from "@/lib/undo";
 import { isValidNumber } from "@/lib/validation";
@@ -74,7 +75,13 @@ export async function moveMoney(
   refresh();
 }
 
-/** Top the month's assignment up to the category's monthly target. */
+/**
+ * Fund a category's monthly goal: add this month's remaining goal amount (the
+ * capped "to go", at most one month's target) and mark the goal funded for the
+ * month. Adds rather than sets-to-target, so money pulled out of the category
+ * is never re-injected; the funded flag keeps the goal met even if the money is
+ * later spent or reallocated out (see `computeGoalStatus`).
+ */
 export async function fundToGoal(month: string, categoryId: number): Promise<void> {
   const category = db
     .select({ monthlyTarget: schema.categories.monthlyTarget })
@@ -84,6 +91,38 @@ export async function fundToGoal(month: string, categoryId: number): Promise<voi
   if (!category || category.monthlyTarget == null) return;
   const target = category.monthlyTarget;
   if (!isValidNumber(target)) return;
-  withUndoStep("Fund to target", () => upsertAssignment(month, categoryId, target));
+
+  const assignedRow = db
+    .select({ amount: schema.assignments.amount, goalFunded: schema.assignments.goalFunded })
+    .from(schema.assignments)
+    .where(and(eq(schema.assignments.month, month), eq(schema.assignments.categoryId, categoryId)))
+    .get();
+  const remaining =
+    computeGoalStatus(target, assignedRow?.amount ?? 0, assignedRow?.goalFunded ?? false)?.remaining ?? 0;
+  if (remaining === 0) return;
+
+  withUndoStep("Fund to target", () => {
+    adjustAssignment(db, month, categoryId, remaining);
+    db.update(schema.assignments)
+      .set({ goalFunded: true })
+      .where(and(eq(schema.assignments.month, month), eq(schema.assignments.categoryId, categoryId)))
+      .run();
+  });
+  refresh();
+}
+
+/**
+ * Clear the "funded this month" flag so the goal re-opens for the month. Only
+ * touches the flag — the money that was assigned stays put (use Undo to revert
+ * the assignment itself).
+ */
+export async function resetGoalFunding(month: string, categoryId: number): Promise<void> {
+  withUndoStep("Reset goal funding", () =>
+    db
+      .update(schema.assignments)
+      .set({ goalFunded: false })
+      .where(and(eq(schema.assignments.month, month), eq(schema.assignments.categoryId, categoryId)))
+      .run()
+  );
   refresh();
 }
