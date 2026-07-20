@@ -15,6 +15,7 @@ import {
   setCategoryHidden as setCategoryHiddenRow,
   type SettingsResult,
 } from "@/lib/queries";
+import { withUndoStep } from "@/lib/undo";
 import { refresh } from "./refresh";
 
 export type ActionResult = SettingsResult;
@@ -24,7 +25,7 @@ export async function createCategoryGroupAction(
 ): Promise<ActionResult & { id?: number }> {
   const trimmed = name.trim();
   if (!trimmed) return { ok: false, error: "Name is required." };
-  const id = createCategoryGroupRow(db, trimmed);
+  const id = withUndoStep("Add group", () => createCategoryGroupRow(db, trimmed));
   refresh();
   return { ok: true, id };
 }
@@ -32,25 +33,27 @@ export async function createCategoryGroupAction(
 export async function renameCategoryGroupAction(id: number, name: string): Promise<ActionResult> {
   const trimmed = name.trim();
   if (!trimmed) return { ok: false, error: "Name is required." };
-  renameCategoryGroupRow(db, id, trimmed);
+  withUndoStep("Rename group", () => renameCategoryGroupRow(db, id, trimmed));
   refresh();
   return { ok: true };
 }
 
 export async function setCategoryGroupHiddenAction(id: number, hidden: boolean): Promise<ActionResult> {
-  setCategoryGroupHiddenRow(db, id, hidden);
+  withUndoStep(hidden ? "Hide group" : "Show group", () =>
+    setCategoryGroupHiddenRow(db, id, hidden)
+  );
   refresh();
   return { ok: true };
 }
 
 export async function deleteCategoryGroupAction(id: number): Promise<ActionResult> {
-  const result = deleteCategoryGroupRow(db, id);
+  const result = withUndoStep("Delete group", () => deleteCategoryGroupRow(db, id));
   if (result.ok) refresh();
   return result;
 }
 
 export async function reorderCategoryGroupsAction(orderedGroupIds: number[]): Promise<ActionResult> {
-  reorderCategoryGroupsRow(db, orderedGroupIds);
+  withUndoStep("Reorder groups", () => reorderCategoryGroupsRow(db, orderedGroupIds));
   refresh();
   return { ok: true };
 }
@@ -61,7 +64,7 @@ export async function createCategoryAction(
 ): Promise<ActionResult & { id?: number }> {
   const trimmed = name.trim();
   if (!trimmed) return { ok: false, error: "Name is required." };
-  const id = createCategoryRow(db, groupId, trimmed);
+  const id = withUndoStep("Add category", () => createCategoryRow(db, groupId, trimmed));
   refresh();
   return { ok: true, id };
 }
@@ -69,19 +72,21 @@ export async function createCategoryAction(
 export async function renameCategoryAction(id: number, name: string): Promise<ActionResult> {
   const trimmed = name.trim();
   if (!trimmed) return { ok: false, error: "Name is required." };
-  renameCategoryRow(db, id, trimmed);
+  withUndoStep("Rename category", () => renameCategoryRow(db, id, trimmed));
   refresh();
   return { ok: true };
 }
 
 export async function setCategoryHiddenAction(id: number, hidden: boolean): Promise<ActionResult> {
-  setCategoryHiddenRow(db, id, hidden);
+  withUndoStep(hidden ? "Hide category" : "Show category", () =>
+    setCategoryHiddenRow(db, id, hidden)
+  );
   refresh();
   return { ok: true };
 }
 
 export async function deleteCategoryAction(id: number): Promise<ActionResult> {
-  const result = deleteCategoryRow(db, id);
+  const result = withUndoStep("Delete category", () => deleteCategoryRow(db, id));
   if (result.ok) refresh();
   return result;
 }
@@ -90,13 +95,13 @@ export async function reorderCategoriesAction(
   groupId: number,
   orderedCategoryIds: number[]
 ): Promise<ActionResult> {
-  reorderCategoriesRow(db, groupId, orderedCategoryIds);
+  withUndoStep("Reorder categories", () => reorderCategoriesRow(db, groupId, orderedCategoryIds));
   refresh();
   return { ok: true };
 }
 
 export async function moveCategoryToGroupAction(id: number, groupId: number): Promise<ActionResult> {
-  moveCategoryToGroupRow(db, id, groupId);
+  withUndoStep("Move category", () => moveCategoryToGroupRow(db, id, groupId));
   refresh();
   return { ok: true };
 }

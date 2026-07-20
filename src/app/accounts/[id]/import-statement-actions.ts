@@ -8,6 +8,7 @@ import {
   type SwissquoteRowInput,
 } from "@/lib/queries";
 import { extractStatementText, parseStatementText } from "@/lib/swissquote-import";
+import { withUndoStep } from "@/lib/undo";
 import { refresh } from "../refresh";
 
 export type StatementPreviewRowDto = SwissquotePreviewRow;
@@ -63,7 +64,9 @@ export async function confirmStatementAction(
   rows: SwissquoteRowInput[]
 ): Promise<ConfirmStatementResult> {
   if (rows.length === 0) return { ok: false, error: "No rows selected." };
-  const count = commitSwissquoteImport(db, accountId, rows);
+  const count = withUndoStep(`Import ${rows.length} statement rows`, () =>
+    commitSwissquoteImport(db, accountId, rows)
+  );
   refresh(accountId);
   return { ok: true, count };
 }

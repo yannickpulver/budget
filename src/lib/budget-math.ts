@@ -274,3 +274,18 @@ export function prevMonthKey(month: string): string {
   const date = new Date(Date.UTC(year, mon - 1 - 1, 1));
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
+
+/**
+ * Display-only: whether an account hidden from `hiddenFrom` (YYYY-MM) onward
+ * should be hidden when viewing `month`. Lexicographic compare is exact for
+ * zero-padded YYYY-MM keys.
+ */
+export function isAccountHiddenForMonth(hiddenFrom: string | null, month: string): boolean {
+  return hiddenFrom != null && month >= hiddenFrom;
+}
+
+/** Extracts the YYYY-MM month from a `/budget/<month>` pathname, or null if absent. */
+export function monthFromPathname(pathname: string): string | null {
+  const match = /^\/budget\/(\d{4}-\d{2})/.exec(pathname);
+  return match ? match[1] : null;
+}
