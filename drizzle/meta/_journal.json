@@ -50,6 +50,20 @@
       "when": 1784484369939,
       "tag": "0006_yellow_darkhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1784538711911,
+      "tag": "0007_loose_redwing",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1784541177979,
+      "tag": "0008_gigantic_molly_hayes",
+      "breakpoints": true
     }
   ]
 }

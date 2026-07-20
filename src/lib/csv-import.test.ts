@@ -151,6 +151,7 @@ CREATE TABLE accounts (
   closed INTEGER NOT NULL DEFAULT 0,
   sort INTEGER NOT NULL DEFAULT 0,
   payment_category_id INTEGER,
+  linked_category_id INTEGER,
   icon TEXT,
   hidden_from TEXT
 );
@@ -185,6 +186,7 @@ CREATE TABLE assignments (
   month TEXT NOT NULL,
   category_id INTEGER NOT NULL,
   amount INTEGER NOT NULL DEFAULT 0,
+  goal_funded INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (month, category_id)
 );
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);

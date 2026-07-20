@@ -10,7 +10,7 @@
  * `data_version` pragma — see `SnapshotStore`.
  */
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { and, desc, eq, gte, inArray, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import {
   computeCategoryActivityEntries,
@@ -325,6 +325,8 @@ export interface CategoryView {
   available: number;
   monthlyTarget: number | null;
   goal: GoalStatus | null;
+  /** True when the monthly goal was explicitly funded this month (the "Fund" button) — met via the flag, resettable. */
+  goalFunded: boolean;
   /** Transactions (and, for credit-card payment categories, feed entries) behind `activity` this month — sums to it. */
   activityTransactions: ActivityEntry[];
   /**
@@ -434,6 +436,17 @@ export function getBudgetView(month: string): BudgetView {
 
   const computeAvgSpend = buildAvgSpendComputer(month, data, store);
 
+  // Categories whose monthly goal was explicitly funded this month — stays met
+  // even if the money is later spent or reallocated out (see `computeGoalStatus`).
+  const fundedCategoryIds = new Set(
+    db
+      .select({ categoryId: schema.assignments.categoryId })
+      .from(schema.assignments)
+      .where(and(eq(schema.assignments.month, month), eq(schema.assignments.goalFunded, true)))
+      .all()
+      .map((r) => r.categoryId)
+  );
+
   let totalUnderfunded = 0;
   const groups: GroupView[] = [...data.groups]
     .sort((a, b) => a.sort - b.sort)
@@ -448,7 +461,8 @@ export function getBudgetView(month: string): BudgetView {
               activity: 0,
               available: 0,
             };
-          const goal = computeGoalStatus(category.monthlyTarget, cell.assigned);
+          const goalFunded = fundedCategoryIds.has(category.id);
+          const goal = computeGoalStatus(category.monthlyTarget, cell.assigned, goalFunded);
           if (goal && !goal.met) totalUnderfunded += goal.remaining;
           const activityTransactions = [...(activityEntriesByCategory.get(category.id) ?? [])].sort(
             (a, b) => a.date.localeCompare(b.date) || a.id - b.id
@@ -461,6 +475,7 @@ export function getBudgetView(month: string): BudgetView {
             available: cell.available,
             monthlyTarget: category.monthlyTarget,
             goal,
+            goalFunded,
             activityTransactions,
             avgSpend: computeAvgSpend(category.id),
           };
@@ -699,6 +714,8 @@ export interface AccountDetail {
   clearedBalance: number;
   unclearedBalance: number;
   transactionCount: number;
+  /** For giftcards: the category new transactions default to. Null otherwise. */
+  linkedCategoryId: number | null;
 }
 
 /** Header data for the account page: balance, cleared/uncleared split, txn count. */
@@ -734,6 +751,7 @@ export function getAccountDetail(id: number, dbi: DB = db): AccountDetail | null
     clearedBalance,
     unclearedBalance: balance - clearedBalance,
     transactionCount: agg?.count ?? 0,
+    linkedCategoryId: account.linkedCategoryId,
   };
 }
 
@@ -948,10 +966,14 @@ export function listCategoryGroupsAdmin(dbi: DB = db): CategoryGroupAdmin[] {
     referencedIds.add(row.categoryId);
   }
   for (const row of dbi
-    .select({ paymentCategoryId: schema.accounts.paymentCategoryId })
+    .select({
+      paymentCategoryId: schema.accounts.paymentCategoryId,
+      linkedCategoryId: schema.accounts.linkedCategoryId,
+    })
     .from(schema.accounts)
     .all()) {
     if (row.paymentCategoryId != null) referencedIds.add(row.paymentCategoryId);
+    if (row.linkedCategoryId != null) referencedIds.add(row.linkedCategoryId);
   }
 
   const byGroup = new Map<number, CategoryAdmin[]>();
@@ -1054,13 +1076,13 @@ function isCategoryReferenced(dbi: DB, id: number): boolean {
     .limit(1)
     .all();
   if (assignment.length > 0) return true;
-  const payment = dbi
+  const linked = dbi
     .select({ id: schema.accounts.id })
     .from(schema.accounts)
-    .where(eq(schema.accounts.paymentCategoryId, id))
+    .where(or(eq(schema.accounts.paymentCategoryId, id), eq(schema.accounts.linkedCategoryId, id)))
     .limit(1)
     .all();
-  return payment.length > 0;
+  return linked.length > 0;
 }
 
 /** Categories can only be deleted while unreferenced (no transactions/assignments/payment link) — hide otherwise. */
@@ -1153,12 +1175,54 @@ export interface CreateAccountInput {
   date: string;
 }
 
+/** Category group that auto-created giftcard categories are filed under. */
+const GIFTCARD_GROUP_NAME = "Giftcards";
+
+/** The single "Giftcards" category group, created on first use. */
+function getOrCreateGiftcardGroup(dbi: DB): number {
+  const existing = dbi
+    .select({ id: schema.categoryGroups.id })
+    .from(schema.categoryGroups)
+    .where(eq(schema.categoryGroups.name, GIFTCARD_GROUP_NAME))
+    .get();
+  return existing?.id ?? createCategoryGroup(dbi, GIFTCARD_GROUP_NAME);
+}
+
+/**
+ * Give a giftcard account its own budget category (same name, under the
+ * shared "Giftcards" group), link the account to it so new spend defaults
+ * there, and assign `balance` to it for `month` so the funds are earmarked —
+ * leaving Ready to Assign unchanged. Called on giftcard creation and when an
+ * existing account is converted to a giftcard.
+ */
+function attachGiftcardCategory(
+  dbi: DB,
+  accountId: number,
+  name: string,
+  balance: number,
+  month: string
+): void {
+  const groupId = getOrCreateGiftcardGroup(dbi);
+  const categoryId = createCategory(dbi, groupId, name);
+  dbi
+    .update(schema.accounts)
+    .set({ linkedCategoryId: categoryId })
+    .where(eq(schema.accounts.id, accountId))
+    .run();
+  if (balance !== 0) adjustAssignment(dbi, month, categoryId, balance);
+}
+
 /**
  * Create an account and, if non-zero, a "Starting Balance" transaction.
  * Uncategorized (categoryId null) for every account type — for on-budget
  * accounts that lands in Ready to Assign; tracking accounts aren't budgeted
  * so it's simply uncategorized. Also seeds the starter category set the
  * first time ever an account is created against an empty categories table.
+ *
+ * Giftcards additionally get a matching budget category (same name, under a
+ * dedicated "Giftcards" group) with their starting balance moved out of
+ * Ready to Assign and into that category — so the funds are earmarked and
+ * ready to spend, leaving Ready to Assign unchanged.
  */
 export function createAccount(dbi: DB, input: CreateAccountInput): number {
   seedDefaultCategoriesIfEmpty(dbi);
@@ -1190,6 +1254,12 @@ export function createAccount(dbi: DB, input: CreateAccountInput): number {
       .run();
   }
 
+  if (input.type === "giftcard") {
+    // Assign in the starting-balance transaction's month so its inflow to
+    // Ready to Assign is exactly offset there, netting RTA to zero.
+    attachGiftcardCategory(dbi, accountId, input.name, input.startingBalance, input.date.slice(0, 7));
+  }
+
   return accountId;
 }
 
@@ -1205,9 +1275,21 @@ export function setAccountClosed(dbi: DB, id: number, closed: boolean): void {
  * Switching between on-budget and tracking legitimately changes Ready to
  * Assign — that's the point (e.g. a mis-detected investment account can be
  * flipped to tracking). No special-casing here.
+ *
+ * Converting to a giftcard mirrors giftcard creation: the account gets its
+ * own linked budget category with its current balance assigned there. Idempotent
+ * — an account already linked (e.g. converted away and back) keeps its category.
  */
 export function setAccountType(dbi: DB, id: number, type: AccountType): void {
   dbi.update(schema.accounts).set({ type }).where(eq(schema.accounts.id, id)).run();
+
+  if (type === "giftcard") {
+    const account = dbi.select().from(schema.accounts).where(eq(schema.accounts.id, id)).get();
+    if (account && account.linkedCategoryId == null) {
+      const balance = getAccountDetail(id, dbi)?.balance ?? 0;
+      attachGiftcardCategory(dbi, id, account.name, balance, currentMonth());
+    }
+  }
 }
 
 /** Sets or clears (`null`) the emoji override shown instead of the type's default icon. */
