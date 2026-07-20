@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import { Check, Target } from "lucide-react";
+import { Check, RotateCcw, Target } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { evaluateMoneyExpression, formatMoney } from "@/lib/currency";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { fundToGoal, setMonthlyTarget } from "../actions";
+import { fundToGoal, resetGoalFunding, setMonthlyTarget } from "../actions";
 
 interface GoalControlProps {
   month: string;
@@ -21,6 +21,8 @@ interface GoalControlProps {
   monthlyTarget: number | null;
   goalMet: boolean;
   remaining: number;
+  /** Goal met via the "Fund" button this month — the ✓ becomes a reset toggle. */
+  funded: boolean;
 }
 
 export function GoalControl({
@@ -29,6 +31,7 @@ export function GoalControl({
   monthlyTarget,
   goalMet,
   remaining,
+  funded,
 }: GoalControlProps) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
@@ -55,6 +58,10 @@ export function GoalControl({
     startTransition(() => fundToGoal(month, categoryId));
   }
 
+  function reset() {
+    startTransition(() => resetGoalFunding(month, categoryId));
+  }
+
   return (
     <div className={cn("flex items-center gap-1.5", pending && "opacity-50")}>
       {monthlyTarget != null && !goalMet && (
@@ -67,7 +74,20 @@ export function GoalControl({
           </Button>
         </>
       )}
-      {monthlyTarget != null && goalMet && (
+      {monthlyTarget != null && goalMet && funded && (
+        <button
+          type="button"
+          onClick={reset}
+          disabled={pending}
+          aria-label="Funded this month — click to reset"
+          title="Funded this month — click to reset"
+          className="group flex size-4 items-center justify-center text-emerald-600 hover:text-amber-600"
+        >
+          <Check className="size-3.5 group-hover:hidden" />
+          <RotateCcw className="hidden size-3 group-hover:block" />
+        </button>
+      )}
+      {monthlyTarget != null && goalMet && !funded && (
         <Check className="size-3.5 text-emerald-600" aria-label="Goal met" />
       )}
 
