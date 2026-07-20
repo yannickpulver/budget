@@ -1,0 +1,1 @@
+ALTER TABLE `assignments` ADD `goal_funded` integer DEFAULT false NOT NULL;

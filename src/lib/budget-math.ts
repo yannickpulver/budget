@@ -246,13 +246,25 @@ export function computeMonthSnapshot(params: {
   };
 }
 
-/** Monthly goal: met when assigned(cat, M) >= target. Spending is irrelevant. */
+/**
+ * Monthly goal. Met when either the goal was explicitly funded this month
+ * (the "Fund" button — see `funded`) or assigned(cat, M) >= target. Spending
+ * is irrelevant.
+ *
+ * `funded` lets one month's contribution satisfy the goal even after money is
+ * later spent or reallocated out of the category (which would drag assigned
+ * negative). Without it, "to go" is `target - assigned`, capped at the target
+ * itself: money moved out never inflates the goal beyond one month's worth, so
+ * a target of 500 asks for at most 500 in a month regardless of what was pulled.
+ */
 export function computeGoalStatus(
   monthlyTarget: number | null,
-  assigned: number
+  assigned: number,
+  funded = false
 ): GoalStatus | null {
   if (monthlyTarget == null) return null;
-  const remaining = Math.max(0, monthlyTarget - assigned);
+  if (funded) return { met: true, remaining: 0 };
+  const remaining = Math.max(0, Math.min(monthlyTarget, monthlyTarget - assigned));
   return { met: remaining === 0, remaining };
 }
 

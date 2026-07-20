@@ -16,31 +16,36 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-const EMPTY_SELECTION: CategorySelection = { kind: "rta" };
+/** Giftcard accounts default new spend to their own category; others to Ready to Assign. */
+function initialSelection(defaultCategoryId: number | null | undefined): CategorySelection {
+  return defaultCategoryId != null ? { kind: "category", categoryId: defaultCategoryId } : { kind: "rta" };
+}
 
 export function AddTransactionRow({
   accountId,
   groups,
   transferTargets,
   payeeSuggestions,
+  defaultCategoryId,
 }: {
   accountId: number;
   groups: CategoryGroupOption[];
   transferTargets: TransferTarget[];
   payeeSuggestions: string[];
+  defaultCategoryId?: number | null;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [date, setDate] = useState(todayIso());
   const [payee, setPayee] = useState("");
-  const [selection, setSelection] = useState<CategorySelection>(EMPTY_SELECTION);
+  const [selection, setSelection] = useState<CategorySelection>(() => initialSelection(defaultCategoryId));
   const [memo, setMemo] = useState("");
   const [outflow, setOutflow] = useState("");
   const [inflow, setInflow] = useState("");
 
   function reset() {
     setPayee("");
-    setSelection(EMPTY_SELECTION);
+    setSelection(initialSelection(defaultCategoryId));
     setMemo("");
     setOutflow("");
     setInflow("");
