@@ -1,0 +1,1 @@
+ALTER TABLE `accounts` ADD `hidden_from` text;

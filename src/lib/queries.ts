@@ -601,6 +601,8 @@ export interface AccountBalance {
   type: AccountType;
   closed: boolean;
   icon: string | null;
+  /** Month (YYYY-MM) from which this account is hidden in the sidebar; null = never. */
+  hiddenFrom: string | null;
   balance: number;
 }
 
@@ -623,6 +625,7 @@ export function listAccountBalances(dbi: DB = db): AccountBalance[] {
       type: schema.accounts.type,
       closed: schema.accounts.closed,
       icon: schema.accounts.icon,
+      hiddenFrom: schema.accounts.hiddenFrom,
       sort: schema.accounts.sort,
     })
     .from(schema.accounts)
@@ -636,6 +639,7 @@ export function listAccountBalances(dbi: DB = db): AccountBalance[] {
       type: a.type,
       closed: a.closed,
       icon: a.icon,
+      hiddenFrom: a.hiddenFrom,
       balance: balanceById.get(a.id) ?? 0,
     }));
 }
@@ -1209,6 +1213,11 @@ export function setAccountType(dbi: DB, id: number, type: AccountType): void {
 /** Sets or clears (`null`) the emoji override shown instead of the type's default icon. */
 export function setAccountIcon(dbi: DB, id: number, icon: string | null): void {
   dbi.update(schema.accounts).set({ icon }).where(eq(schema.accounts.id, id)).run();
+}
+
+/** Sets (YYYY-MM) or clears (`null`) the month from which the account is hidden in the sidebar. */
+export function setAccountHiddenFrom(dbi: DB, id: number, month: string | null): void {
+  dbi.update(schema.accounts).set({ hiddenFrom: month }).where(eq(schema.accounts.id, id)).run();
 }
 
 export function deleteAccount(dbi: DB, id: number): void {

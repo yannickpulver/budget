@@ -35,7 +35,8 @@ CREATE TABLE accounts (
   closed INTEGER NOT NULL DEFAULT 0,
   sort INTEGER NOT NULL DEFAULT 0,
   payment_category_id INTEGER,
-  icon TEXT
+  icon TEXT,
+  hidden_from TEXT
 );
 CREATE TABLE transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

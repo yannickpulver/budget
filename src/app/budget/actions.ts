@@ -1,20 +1,15 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
-import { adjustAssignment, invalidateBudgetCache } from "@/lib/queries";
+import { adjustAssignment } from "@/lib/queries";
+import { withUndoStep } from "@/lib/undo";
 import { isValidNumber } from "@/lib/validation";
-
-const BUDGET_ROUTE = "/budget/[month]";
-
-function refresh(): void {
-  invalidateBudgetCache();
-  // Carry-forward means a write in one month affects every later month, so
-  // revalidate the whole dynamic route rather than a single month.
-  revalidatePath(BUDGET_ROUTE, "page");
-}
+// Shared refresh (revalidates the layout too, keeping the undo toolbar fresh);
+// its `/budget/[month]` page revalidation already covers carry-forward, which
+// makes a write in one month affect every later month.
+import { refresh } from "../accounts/refresh";
 
 function upsertAssignment(month: string, categoryId: number, amount: number): void {
   db.insert(schema.assignments)
@@ -33,7 +28,7 @@ export async function setAssigned(
   amount: number
 ): Promise<void> {
   if (!isValidNumber(amount)) return;
-  upsertAssignment(month, categoryId, Math.round(amount));
+  withUndoStep("Assign", () => upsertAssignment(month, categoryId, Math.round(amount)));
   refresh();
 }
 
@@ -43,10 +38,13 @@ export async function setMonthlyTarget(
   amount: number | null
 ): Promise<void> {
   if (amount != null && !isValidNumber(amount)) return;
-  db.update(schema.categories)
-    .set({ monthlyTarget: amount == null ? null : Math.round(amount) })
-    .where(eq(schema.categories.id, categoryId))
-    .run();
+  withUndoStep("Set target", () =>
+    db
+      .update(schema.categories)
+      .set({ monthlyTarget: amount == null ? null : Math.round(amount) })
+      .where(eq(schema.categories.id, categoryId))
+      .run()
+  );
   refresh();
 }
 
@@ -67,10 +65,12 @@ export async function moveMoney(
   if (!isValidNumber(amount) || amount <= 0) return;
   if (fromCategoryId === toCategoryId) return;
   const rounded = Math.round(amount);
-  db.transaction((tx) => {
-    if (fromCategoryId != null) adjustAssignment(tx, month, fromCategoryId, -rounded);
-    if (toCategoryId != null) adjustAssignment(tx, month, toCategoryId, rounded);
-  });
+  withUndoStep("Move money", () =>
+    db.transaction((tx) => {
+      if (fromCategoryId != null) adjustAssignment(tx, month, fromCategoryId, -rounded);
+      if (toCategoryId != null) adjustAssignment(tx, month, toCategoryId, rounded);
+    })
+  );
   refresh();
 }
 
@@ -82,7 +82,8 @@ export async function fundToGoal(month: string, categoryId: number): Promise<voi
     .where(eq(schema.categories.id, categoryId))
     .get();
   if (!category || category.monthlyTarget == null) return;
-  if (!isValidNumber(category.monthlyTarget)) return;
-  upsertAssignment(month, categoryId, category.monthlyTarget);
+  const target = category.monthlyTarget;
+  if (!isValidNumber(target)) return;
+  withUndoStep("Fund to target", () => upsertAssignment(month, categoryId, target));
   refresh();
 }
