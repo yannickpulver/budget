@@ -442,6 +442,7 @@ function Row({
           monthlyTarget={category.monthlyTarget}
           goalMet={category.goal?.met ?? false}
           remaining={category.goal?.remaining ?? 0}
+          funded={category.goalFunded}
         />
       </div>
       <AssignCell month={month} categoryId={category.id} assigned={category.assigned} />

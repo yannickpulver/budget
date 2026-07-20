@@ -375,6 +375,21 @@ describe("monthly goal underfunded calc", () => {
     expect(computeGoalStatus(12000, 12000)).toEqual({ met: true, remaining: 0 });
     expect(computeGoalStatus(12000, 15000)).toEqual({ met: true, remaining: 0 });
   });
+
+  it("caps 'to go' at the target when money was pulled out (negative assigned)", () => {
+    // Target 500, but 955 was reallocated out (assigned -955): the goal asks
+    // for at most one month's target, not target + what was withdrawn.
+    expect(computeGoalStatus(50000, -95500)).toEqual({ met: false, remaining: 50000 });
+    // Just below zero is still capped at the full target.
+    expect(computeGoalStatus(50000, -1)).toEqual({ met: false, remaining: 50000 });
+  });
+
+  it("is met when explicitly funded this month, even if net assigned is still negative", () => {
+    // Pulled 955 out then funded one month's 500 → net -455, but the monthly
+    // contribution is done, so the goal is met and quiet.
+    expect(computeGoalStatus(50000, -45500, true)).toEqual({ met: true, remaining: 0 });
+    expect(computeGoalStatus(50000, 0, true)).toEqual({ met: true, remaining: 0 });
+  });
 });
 
 describe("nextMonthKey", () => {
