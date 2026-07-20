@@ -14,6 +14,7 @@ import {
   reorderAccounts as reorderAccountsRow,
   setAccountBalance,
   setAccountClosed,
+  setAccountHiddenFrom,
   setAccountIcon,
   setAccountType,
   toggleTransactionCleared,
@@ -22,6 +23,7 @@ import {
   type TransactionEditInput,
 } from "@/lib/queries";
 import { refreshPayeeIcons, type PayeeIconRefreshResult } from "@/lib/payee-icons";
+import { withUndoStep } from "@/lib/undo";
 import { isValidNumber } from "@/lib/validation";
 // `refresh` lives here (not this file) because every export of a "use
 // server" module must itself be an async server action.
@@ -46,12 +48,14 @@ export async function createAccountAction(
   const name = input.name.trim();
   if (!name) return { ok: false, error: "Name is required." };
 
-  const id = createAccountRow(db, {
-    name,
-    type: input.type,
-    startingBalance: Math.round(input.startingBalance),
-    date: todayIso(),
-  });
+  const id = withUndoStep(`Add account ${name}`, () =>
+    createAccountRow(db, {
+      name,
+      type: input.type,
+      startingBalance: Math.round(input.startingBalance),
+      date: todayIso(),
+    })
+  );
   refresh(id);
   return { ok: true, id };
 }
@@ -59,14 +63,14 @@ export async function createAccountAction(
 export async function renameAccountAction(id: number, name: string): Promise<ActionResult> {
   const trimmed = name.trim();
   if (!trimmed) return { ok: false, error: "Name is required." };
-  renameAccountRow(db, id, trimmed);
+  withUndoStep("Rename account", () => renameAccountRow(db, id, trimmed));
   refresh(id);
   return { ok: true };
 }
 
 /** Reorder accounts within one sidebar section (Budget/Giftcards/Tracking) — `ids` is that section's full id list in the new order. */
 export async function reorderAccountsAction(ids: number[]): Promise<ActionResult> {
-  reorderAccountsRow(db, ids);
+  withUndoStep("Reorder accounts", () => reorderAccountsRow(db, ids));
   refresh();
   return { ok: true };
 }
@@ -75,13 +79,33 @@ export async function closeAccountAction(id: number): Promise<ActionResult> {
   const detail = getAccountDetail(id, db);
   if (!detail) return { ok: false, error: "Account not found." };
   if (detail.balance !== 0) return { ok: false, error: "Balance must be zero to close an account." };
-  setAccountClosed(db, id, true);
+  withUndoStep("Close account", () => setAccountClosed(db, id, true));
   refresh(id);
   return { ok: true };
 }
 
 export async function reopenAccountAction(id: number): Promise<ActionResult> {
-  setAccountClosed(db, id, false);
+  withUndoStep("Reopen account", () => setAccountClosed(db, id, false));
+  refresh(id);
+  return { ok: true };
+}
+
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/**
+ * Hides the account from the sidebar starting at `month` (YYYY-MM); earlier
+ * months still show it. Display-only — budget math and totals are unaffected.
+ */
+export async function hideAccountFromMonthAction(id: number, month: string): Promise<ActionResult> {
+  if (!MONTH_RE.test(month)) return { ok: false, error: "Invalid month." };
+  withUndoStep("Hide account", () => setAccountHiddenFrom(db, id, month));
+  refresh(id);
+  return { ok: true };
+}
+
+/** Clears the hidden-from flag so the account reappears in every month. */
+export async function unhideAccountAction(id: number): Promise<ActionResult> {
+  withUndoStep("Unhide account", () => setAccountHiddenFrom(db, id, null));
   refresh(id);
   return { ok: true };
 }
@@ -92,14 +116,14 @@ export async function reopenAccountAction(id: number): Promise<ActionResult> {
  * account to tracking). No special-casing.
  */
 export async function updateAccountTypeAction(id: number, type: AccountType): Promise<ActionResult> {
-  setAccountType(db, id, type);
+  withUndoStep("Change account type", () => setAccountType(db, id, type));
   refresh(id);
   return { ok: true };
 }
 
 /** `icon` is free-text (typically 1-2 emoji chars); `null` resets to the type's default icon. */
 export async function updateAccountIconAction(id: number, icon: string | null): Promise<ActionResult> {
-  setAccountIcon(db, id, icon);
+  withUndoStep("Change account icon", () => setAccountIcon(db, id, icon));
   refresh(id);
   return { ok: true };
 }
@@ -111,7 +135,9 @@ export async function updateAccountIconAction(id: number, icon: string | null): 
  */
 export async function setAccountBalanceAction(id: number, targetBalance: number): Promise<ActionResult> {
   if (!isValidNumber(targetBalance)) return { ok: false, error: "Amount is not a valid number." };
-  const result = setAccountBalance(db, id, Math.round(targetBalance));
+  const result = withUndoStep("Adjust balance", () =>
+    setAccountBalance(db, id, Math.round(targetBalance))
+  );
   if (!result.ok) return result;
   refresh(id);
   return { ok: true };
@@ -123,7 +149,7 @@ export async function deleteAccountAction(id: number): Promise<ActionResult> {
   if (detail.transactionCount > 0) {
     return { ok: false, error: "Only accounts with no transactions can be deleted." };
   }
-  deleteAccountRow(db, id);
+  withUndoStep(`Delete account ${detail.name}`, () => deleteAccountRow(db, id));
   invalidateBudgetCache();
   revalidatePath("/", "layout");
   revalidatePath("/budget/[month]", "page");
@@ -161,15 +187,17 @@ export async function createTransactionAction(input: TransactionFormInput): Prom
   if (input.amount === 0) return { ok: false, error: "Enter an outflow or inflow amount." };
   if (!isValidNumber(input.amount)) return { ok: false, error: "Amount is not a valid number." };
 
-  createTransactionRow(db, {
-    accountId: input.accountId,
-    date: input.date,
-    payee: input.payee.trim(),
-    categoryId: input.categoryId,
-    memo: input.memo.trim(),
-    amount: Math.round(input.amount),
-    cleared: input.cleared,
-  });
+  withUndoStep("Add transaction", () =>
+    createTransactionRow(db, {
+      accountId: input.accountId,
+      date: input.date,
+      payee: input.payee.trim(),
+      categoryId: input.categoryId,
+      memo: input.memo.trim(),
+      amount: Math.round(input.amount),
+      cleared: input.cleared,
+    })
+  );
   refresh(input.accountId);
   return { ok: true };
 }
@@ -193,15 +221,17 @@ export async function createTransferAction(input: TransferFormInput): Promise<Ac
     return { ok: false, error: "Choose a different account to transfer to." };
   }
 
-  createTransferRow(db, {
-    fromAccountId: input.fromAccountId,
-    toAccountId: input.toAccountId,
-    date: input.date,
-    amount: Math.round(Math.abs(input.amount)),
-    memo: input.memo.trim(),
-    cleared: input.cleared,
-    categoryId: input.categoryId,
-  });
+  withUndoStep("Add transfer", () =>
+    createTransferRow(db, {
+      fromAccountId: input.fromAccountId,
+      toAccountId: input.toAccountId,
+      date: input.date,
+      amount: Math.round(Math.abs(input.amount)),
+      memo: input.memo.trim(),
+      cleared: input.cleared,
+      categoryId: input.categoryId,
+    })
+  );
   refresh(input.fromAccountId, input.toAccountId);
   return { ok: true };
 }
@@ -216,14 +246,16 @@ export async function updateTransactionAction(
   if (input.amount === 0) return { ok: false, error: "Enter an outflow or inflow amount." };
   if (!isValidNumber(input.amount)) return { ok: false, error: "Amount is not a valid number." };
 
-  updateTransactionRow(db, id, {
-    date: input.date,
-    payee: input.payee.trim(),
-    categoryId: input.categoryId,
-    memo: input.memo.trim(),
-    amount: Math.round(input.amount),
-    cleared: input.cleared,
-  });
+  withUndoStep("Edit transaction", () =>
+    updateTransactionRow(db, id, {
+      date: input.date,
+      payee: input.payee.trim(),
+      categoryId: input.categoryId,
+      memo: input.memo.trim(),
+      amount: Math.round(input.amount),
+      cleared: input.cleared,
+    })
+  );
   refresh(accountId, otherAccountId);
   return { ok: true };
 }
@@ -233,7 +265,7 @@ export async function deleteTransactionAction(
   accountId: number,
   otherAccountId: number | null
 ): Promise<void> {
-  deleteTransactionRow(db, id);
+  withUndoStep("Delete transaction", () => deleteTransactionRow(db, id));
   refresh(accountId, otherAccountId);
 }
 
@@ -242,6 +274,6 @@ export async function toggleClearedAction(
   accountId: number,
   otherAccountId: number | null
 ): Promise<void> {
-  toggleTransactionCleared(db, id);
+  withUndoStep("Toggle cleared", () => toggleTransactionCleared(db, id));
   refresh(accountId, otherAccountId);
 }

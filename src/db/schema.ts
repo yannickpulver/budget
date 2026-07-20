@@ -22,6 +22,10 @@ export const accounts = sqliteTable("accounts", {
   // Optional emoji override (1-2 chars, free text) shown instead of the
   // type's default lucide icon. Null = use the type default.
   icon: text("icon"),
+  // Display-only: the month (YYYY-MM) from which this account is hidden in the
+  // sidebar. Viewing any earlier month still shows it. Null = never hidden.
+  // Purely cosmetic — budget math and totals ignore this flag.
+  hiddenFrom: text("hidden_from"),
 });
 
 export const categoryGroups = sqliteTable("category_groups", {

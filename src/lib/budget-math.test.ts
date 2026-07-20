@@ -4,6 +4,8 @@ import {
   computeCategoryActivity,
   computeGoalStatus,
   computeMonthSnapshot,
+  isAccountHiddenForMonth,
+  monthFromPathname,
   nextMonthKey,
   type AccountInfo,
   type MonthSnapshot,
@@ -382,5 +384,44 @@ describe("nextMonthKey", () => {
 
   it("increments within a year", () => {
     expect(nextMonthKey("2025-06")).toBe("2025-07");
+  });
+});
+
+describe("isAccountHiddenForMonth", () => {
+  it("is never hidden when hiddenFrom is null", () => {
+    expect(isAccountHiddenForMonth(null, "2026-07")).toBe(false);
+  });
+
+  it("is not hidden for months before hiddenFrom", () => {
+    expect(isAccountHiddenForMonth("2026-07", "2026-06")).toBe(false);
+    expect(isAccountHiddenForMonth("2026-01", "2025-12")).toBe(false);
+  });
+
+  it("is hidden from the hiddenFrom month itself", () => {
+    expect(isAccountHiddenForMonth("2026-07", "2026-07")).toBe(true);
+  });
+
+  it("is hidden for months after hiddenFrom", () => {
+    expect(isAccountHiddenForMonth("2026-07", "2026-08")).toBe(true);
+    expect(isAccountHiddenForMonth("2025-12", "2026-01")).toBe(true);
+  });
+});
+
+describe("monthFromPathname", () => {
+  it("extracts the month from a budget pathname", () => {
+    expect(monthFromPathname("/budget/2026-07")).toBe("2026-07");
+  });
+
+  it("extracts the month when a suffix follows", () => {
+    expect(monthFromPathname("/budget/2026-07?filter=negative")).toBe("2026-07");
+  });
+
+  it("returns null for non-budget paths", () => {
+    expect(monthFromPathname("/accounts/3")).toBeNull();
+    expect(monthFromPathname("/settings/categories")).toBeNull();
+  });
+
+  it("returns null when no month is present", () => {
+    expect(monthFromPathname("/budget/")).toBeNull();
   });
 });

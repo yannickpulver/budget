@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "@/db";
 import { parseImportCsv, type ImportRowError } from "@/lib/csv-import";
 import { buildImportPreview, commitImport, type ImportPreviewRow } from "@/lib/queries";
+import { withUndoStep } from "@/lib/undo";
 import { refresh } from "../refresh";
 
 export type ImportRowErrorDto = ImportRowError;
@@ -56,7 +57,9 @@ export async function confirmImportAction(
   batchId: string
 ): Promise<ConfirmImportResult> {
   if (rows.length === 0) return { ok: false, error: "No rows selected." };
-  const count = commitImport(db, accountId, rows, batchId);
+  const count = withUndoStep(`Import ${rows.length} transactions`, () =>
+    commitImport(db, accountId, rows, batchId)
+  );
   refresh(accountId);
   return { ok: true, count };
 }

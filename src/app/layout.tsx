@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Sidebar } from "@/components/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getSidebarData } from "@/lib/queries";
+import { undoState } from "@/lib/undo";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -26,6 +27,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   const sidebarData = getSidebarData();
+  const undo = undoState();
 
   return (
     <html
@@ -35,7 +37,7 @@ export default function RootLayout({
       <body className="min-h-full">
         <TooltipProvider delay={200}>
           <div className="flex min-h-screen">
-            <Sidebar data={sidebarData} />
+            <Sidebar data={sidebarData} undo={undo} />
             <main className="flex min-w-0 flex-1 flex-col">{children}</main>
           </div>
         </TooltipProvider>
