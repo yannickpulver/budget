@@ -57,7 +57,9 @@ CREATE TABLE categories (
   name TEXT NOT NULL,
   sort INTEGER NOT NULL DEFAULT 0,
   hidden INTEGER NOT NULL DEFAULT 0,
-  monthly_target INTEGER
+  monthly_target INTEGER,
+  target_type TEXT NOT NULL DEFAULT 'monthly',
+  target_date TEXT
 );
 CREATE TABLE transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -358,7 +360,10 @@ describe("budget filter chips", () => {
       activity: 0,
       available: 0,
       monthlyTarget: null,
+      targetType: "monthly",
+      targetDate: null,
       goal: null,
+      underfunded: false,
       goalFunded: false,
       activityTransactions: [],
       avgSpend: null,
@@ -373,6 +378,7 @@ describe("budget filter chips", () => {
     monthlyTarget: 10000,
     assigned: 4000,
     goal: { met: false, remaining: 6000 },
+    underfunded: true,
   });
   const negative = cat({ id: 3, name: "Negative", available: -500 });
   const both = cat({
@@ -381,6 +387,7 @@ describe("budget filter chips", () => {
     monthlyTarget: 5000,
     assigned: 0,
     goal: { met: false, remaining: 5000 },
+    underfunded: true,
     available: -200,
   });
   const plain = cat({ id: 5, name: "Plain" });

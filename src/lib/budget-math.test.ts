@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeAvailable,
+  computeBalanceGoalStatus,
   computeCategoryActivity,
   computeGoalStatus,
   computeMonthSnapshot,
@@ -389,6 +390,42 @@ describe("monthly goal underfunded calc", () => {
     // contribution is done, so the goal is met and quiet.
     expect(computeGoalStatus(50000, -45500, true)).toEqual({ met: true, remaining: 0 });
     expect(computeGoalStatus(50000, 0, true)).toEqual({ met: true, remaining: 0 });
+  });
+});
+
+describe("balance goal", () => {
+  const base = { month: "2025-01", funded: false };
+
+  it("is met once available reaches the target, regardless of the deadline", () => {
+    const status = computeBalanceGoalStatus({ ...base, target: 200000, targetDate: "2025-06", assigned: 0, available: 200000 });
+    expect(status).toEqual({ met: true, remaining: 0, underfunded: false });
+  });
+
+  it("with no deadline, asks for the full remainder this month", () => {
+    // Saved 50'000 before, target 200'000, nothing assigned yet → 150'000 to go.
+    const status = computeBalanceGoalStatus({ ...base, target: 200000, targetDate: null, assigned: 0, available: 50000 });
+    expect(status).toEqual({ met: false, remaining: 150000, underfunded: true });
+  });
+
+  it("with a future deadline, paces the remainder evenly (rounding up)", () => {
+    // 150'000 to go across Jan–Jun (6 months) → 25'000/month.
+    const status = computeBalanceGoalStatus({ ...base, target: 200000, targetDate: "2025-06", assigned: 0, available: 50000 });
+    expect(status).toEqual({ met: false, remaining: 25000, underfunded: true });
+  });
+
+  it("is on track (not underfunded) once this month's assignment covers the pace", () => {
+    const status = computeBalanceGoalStatus({ ...base, target: 200000, targetDate: "2025-06", assigned: 25000, available: 75000 });
+    expect(status).toEqual({ met: false, remaining: 0, underfunded: false });
+  });
+
+  it("treats a past deadline like no deadline (full remainder)", () => {
+    const status = computeBalanceGoalStatus({ ...base, target: 200000, targetDate: "2024-06", assigned: 0, available: 50000 });
+    expect(status).toEqual({ met: false, remaining: 150000, underfunded: true });
+  });
+
+  it("is met when explicitly funded, even below target", () => {
+    const status = computeBalanceGoalStatus({ ...base, target: 200000, targetDate: "2025-06", assigned: 0, available: 50000, funded: true });
+    expect(status).toEqual({ met: true, remaining: 0, underfunded: false });
   });
 });
 

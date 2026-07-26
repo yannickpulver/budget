@@ -35,9 +35,16 @@ export interface MonthSnapshot {
   cumulativeOnBudgetFunds: number;
 }
 
+export type TargetType = "monthly" | "balance";
+
 export interface GoalStatus {
   met: boolean;
   remaining: number;
+}
+
+export interface BalanceGoalStatus extends GoalStatus {
+  /** Behind pace this month: not met and this month's assignment is short of the suggested contribution. */
+  underfunded: boolean;
 }
 
 /** available(cat, M) = max(0, available(cat, M-1)) + assigned(cat, M) + activity(cat, M) */
@@ -266,6 +273,42 @@ export function computeGoalStatus(
   if (funded) return { met: true, remaining: 0 };
   const remaining = Math.max(0, Math.min(monthlyTarget, monthlyTarget - assigned));
   return { met: remaining === 0, remaining };
+}
+
+/** Months from `year * 12 + monthIndex`, for arithmetic over YYYY-MM keys. */
+function monthOrdinal(month: string): number {
+  const [year, mon] = month.split("-").map(Number);
+  return year * 12 + (mon - 1);
+}
+
+/**
+ * Balance goal ("save up to a total available of `target`"). Met when this
+ * month's `available` (rollover + assigned + activity) reaches the target, or
+ * the goal was explicitly funded. When a `targetDate` is set and still ahead,
+ * the suggested contribution paces the remainder evenly across the months left
+ * (this month through the target month inclusive); otherwise it's the whole
+ * remainder. `underfunded` is the pace check: not met and this month's
+ * assignment is short of that suggestion.
+ */
+export function computeBalanceGoalStatus(params: {
+  target: number;
+  targetDate: string | null;
+  month: string;
+  assigned: number;
+  available: number;
+  funded: boolean;
+}): BalanceGoalStatus {
+  const { target, targetDate, month, assigned, available, funded } = params;
+  const met = funded || available >= target;
+  // Available carried in plus this month's activity — what's saved regardless
+  // of this month's assignment, so the suggestion is "assign this much now".
+  const availableBeforeAssignment = available - assigned;
+  const totalRemaining = Math.max(0, target - availableBeforeAssignment);
+  const hasFutureDate = targetDate != null && targetDate >= month;
+  const monthsLeft = hasFutureDate ? monthOrdinal(targetDate) - monthOrdinal(month) + 1 : 1;
+  const suggested = hasFutureDate ? Math.ceil(totalRemaining / monthsLeft) : totalRemaining;
+  const remaining = met ? 0 : Math.max(0, suggested - assigned);
+  return { met, remaining, underfunded: !met && remaining > 0 };
 }
 
 /** YYYY-MM-DD -> YYYY-MM */

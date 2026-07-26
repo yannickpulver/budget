@@ -3,8 +3,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
-import { computeGoalStatus } from "@/lib/budget-math";
-import { adjustAssignment } from "@/lib/queries";
+import { adjustAssignment, currentMonth, getBudgetView } from "@/lib/queries";
 import { withUndoStep } from "@/lib/undo";
 import { isValidNumber } from "@/lib/validation";
 // Shared refresh (revalidates the layout too, keeping the undo toolbar fresh);
@@ -33,7 +32,7 @@ export async function setAssigned(
   refresh();
 }
 
-/** Set or clear (null) a category's monthly assignment target. */
+/** Set or clear (null) a category's monthly assignment target. Resets it to the monthly goal type. */
 export async function setMonthlyTarget(
   categoryId: number,
   amount: number | null
@@ -42,7 +41,32 @@ export async function setMonthlyTarget(
   withUndoStep("Set target", () =>
     db
       .update(schema.categories)
-      .set({ monthlyTarget: amount == null ? null : Math.round(amount) })
+      .set({
+        monthlyTarget: amount == null ? null : Math.round(amount),
+        targetType: "monthly",
+        targetDate: null,
+      })
+      .where(eq(schema.categories.id, categoryId))
+      .run()
+  );
+  refresh();
+}
+
+/**
+ * Set a category's savings-target (balance) goal: save up to `amount` total
+ * available, optionally pacing toward `targetDate` (YYYY-MM, null = no deadline).
+ */
+export async function setBalanceTarget(
+  categoryId: number,
+  amount: number,
+  targetDate: string | null
+): Promise<void> {
+  if (!isValidNumber(amount)) return;
+  const date = targetDate != null && /^\d{4}-\d{2}$/.test(targetDate) ? targetDate : null;
+  withUndoStep("Set savings target", () =>
+    db
+      .update(schema.categories)
+      .set({ monthlyTarget: Math.round(amount), targetType: "balance", targetDate: date })
       .where(eq(schema.categories.id, categoryId))
       .run()
   );
@@ -76,30 +100,19 @@ export async function moveMoney(
 }
 
 /**
- * Fund a category's monthly goal: add this month's remaining goal amount (the
- * capped "to go", at most one month's target) and mark the goal funded for the
- * month. Adds rather than sets-to-target, so money pulled out of the category
- * is never re-injected; the funded flag keeps the goal met even if the money is
- * later spent or reallocated out (see `computeGoalStatus`).
+ * Fund a category's goal for the month and mark it funded. Assigns this
+ * month's remaining goal amount — for monthly goals the capped "to go" (at most
+ * one month's target); for balance goals the suggested contribution to stay on
+ * pace. Adds rather than sets-to-target, so money pulled out is never
+ * re-injected; the funded flag keeps the goal met even if the money is later
+ * spent or reallocated out (see `computeGoalStatus`/`computeBalanceGoalStatus`).
  */
 export async function fundToGoal(month: string, categoryId: number): Promise<void> {
-  const category = db
-    .select({ monthlyTarget: schema.categories.monthlyTarget })
-    .from(schema.categories)
-    .where(eq(schema.categories.id, categoryId))
-    .get();
-  if (!category || category.monthlyTarget == null) return;
-  const target = category.monthlyTarget;
-  if (!isValidNumber(target)) return;
-
-  const assignedRow = db
-    .select({ amount: schema.assignments.amount, goalFunded: schema.assignments.goalFunded })
-    .from(schema.assignments)
-    .where(and(eq(schema.assignments.month, month), eq(schema.assignments.categoryId, categoryId)))
-    .get();
-  const remaining =
-    computeGoalStatus(target, assignedRow?.amount ?? 0, assignedRow?.goalFunded ?? false)?.remaining ?? 0;
-  if (remaining === 0) return;
+  const category = getBudgetView(month)
+    .groups.flatMap((g) => g.categories)
+    .find((c) => c.id === categoryId);
+  const remaining = category?.goal?.remaining ?? 0;
+  if (remaining <= 0) return;
 
   withUndoStep("Fund to target", () => {
     adjustAssignment(db, month, categoryId, remaining);
@@ -108,6 +121,34 @@ export async function fundToGoal(month: string, categoryId: number): Promise<voi
       .where(and(eq(schema.assignments.month, month), eq(schema.assignments.categoryId, categoryId)))
       .run();
   });
+  refresh();
+}
+
+/**
+ * Close a finished category (a trip, a one-off purchase): release its remaining
+ * Available back to Ready to Assign (by decrementing this month's assignment by
+ * the Available amount), clear its target, and hide it. No-op when Available is
+ * negative — cover the overspend first. Only allowed from the current month:
+ * hiding is global, so releasing a past month's Available could silently
+ * overdraw a later month, and a future month would strand today's Available.
+ */
+export async function closeCategory(month: string, categoryId: number): Promise<void> {
+  if (month !== currentMonth()) return;
+  const category = getBudgetView(month)
+    .groups.flatMap((g) => g.categories)
+    .find((c) => c.id === categoryId);
+  if (!category || category.available < 0) return;
+  const available = category.available;
+
+  withUndoStep("Close category", () =>
+    db.transaction((tx) => {
+      if (available > 0) adjustAssignment(tx, month, categoryId, -available);
+      tx.update(schema.categories)
+        .set({ monthlyTarget: null, targetType: "monthly", targetDate: null, hidden: true })
+        .where(eq(schema.categories.id, categoryId))
+        .run();
+    })
+  );
   refresh();
 }
 
