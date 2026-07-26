@@ -363,6 +363,127 @@ describe("credit-card payment-category feed", () => {
   });
 });
 
+/**
+ * A credit card's balance reaches Ready to Assign solely through its payment
+ * category, so the card must NOT also count toward on-budget funds — RTA is
+ * `funds − Σ available`, so a second copy of the balance skews RTA by that
+ * amount rather than cancelling. RTA must stay flat across the whole
+ * spend → pay → overpay lifecycle: none of those steps is income.
+ */
+describe("credit-card balances stay out of on-budget funds", () => {
+  const lifecycle = (transactions: TxnInput[]) =>
+    walkMonths(
+      [{ assignedByCategory: new Map([[GROCERIES, 100000]]), transactions }],
+      [GROCERIES, PAYMENT_CAT],
+      accountsMap()
+    )[0];
+
+  const income: TxnInput = { accountId: CHECKING, categoryId: null, amount: 100000 };
+  const cardSpend: TxnInput = { accountId: CREDIT, categoryId: GROCERIES, amount: -20000 };
+  const payment: TxnInput[] = [
+    { accountId: CHECKING, categoryId: null, amount: -20000, transferAccountId: CREDIT },
+    { accountId: CREDIT, categoryId: null, amount: 20000, transferAccountId: CHECKING },
+  ];
+  const overpayment: TxnInput[] = [
+    { accountId: CHECKING, categoryId: null, amount: -5000, transferAccountId: CREDIT },
+    { accountId: CREDIT, categoryId: null, amount: 5000, transferAccountId: CHECKING },
+  ];
+
+  it("income fully assigned leaves nothing to assign", () => {
+    const month = lifecycle([income]);
+    expect(month.cumulativeOnBudgetFunds).toBe(100000);
+    expect(month.readyToAssign).toBe(0);
+  });
+
+  it("card debt does not reduce Ready to Assign", () => {
+    const month = lifecycle([income, cardSpend]);
+    // The 200 moved Groceries -> payment category; total available is unchanged,
+    // and funds ignore the card's -200 balance.
+    expect(month.categories.get(GROCERIES)?.available).toBe(80000);
+    expect(month.categories.get(PAYMENT_CAT)?.available).toBe(20000);
+    expect(month.cumulativeOnBudgetFunds).toBe(100000);
+    expect(month.readyToAssign).toBe(0);
+  });
+
+  it("paying the card off does not change Ready to Assign", () => {
+    const month = lifecycle([income, cardSpend, ...payment]);
+    // Real money left checking, and the payment category drained to match.
+    expect(month.categories.get(PAYMENT_CAT)?.available).toBe(0);
+    expect(month.cumulativeOnBudgetFunds).toBe(80000);
+    expect(month.readyToAssign).toBe(0);
+  });
+
+  it("overpaying the card does not hand the money back to Ready to Assign", () => {
+    const month = lifecycle([income, cardSpend, ...payment, ...overpayment]);
+    // The card now sits at +50: budgeted money parked on the card. It shows up
+    // as a hole in the payment category, not as fresh money to assign.
+    expect(month.categories.get(PAYMENT_CAT)?.available).toBe(-5000);
+    expect(month.cumulativeOnBudgetFunds).toBe(75000);
+    expect(month.readyToAssign).toBe(0);
+  });
+
+  it("an uncategorized inflow on a card is not income", () => {
+    // A refund landing on the card that was never categorized: it lowers the
+    // debt but funds no category, so it must not inflate Ready to Assign.
+    const month = lifecycle([income, { accountId: CREDIT, categoryId: null, amount: 5000 }]);
+    expect(month.readyToAssign).toBe(0);
+  });
+});
+
+describe("assigned in future months leaves this month's Ready to Assign", () => {
+  const withFuture = (assignedInFutureMonths: number) =>
+    computeMonthSnapshot({
+      categoryIds: [GROCERIES],
+      prevAvailable: new Map(),
+      assignedByCategory: new Map(),
+      monthTransactions: [{ accountId: CHECKING, categoryId: null, amount: 500000 }],
+      cumulativeOnBudgetFundsThroughPrevMonth: 0,
+      accounts: accountsMap(),
+      assignedInFutureMonths,
+    });
+
+  it("subtracts money earmarked for a later month", () => {
+    // 5000 of salary in, nothing assigned this month, 1000 assigned next month.
+    expect(withFuture(0).readyToAssign).toBe(500000);
+    expect(withFuture(100000).readyToAssign).toBe(400000);
+  });
+
+  it("does not double-count: the later month sees it as available, not as future", () => {
+    const accounts = accountsMap();
+    const july = computeMonthSnapshot({
+      categoryIds: [GROCERIES],
+      prevAvailable: new Map(),
+      assignedByCategory: new Map(),
+      monthTransactions: [{ accountId: CHECKING, categoryId: null, amount: 500000 }],
+      cumulativeOnBudgetFundsThroughPrevMonth: 0,
+      accounts,
+      assignedInFutureMonths: 100000,
+    });
+    const august = computeMonthSnapshot({
+      categoryIds: [GROCERIES],
+      prevAvailable: new Map(),
+      assignedByCategory: new Map([[GROCERIES, 100000]]),
+      monthTransactions: [],
+      cumulativeOnBudgetFundsThroughPrevMonth: july.cumulativeOnBudgetFunds,
+      accounts,
+      assignedInFutureMonths: 0,
+    });
+    // Both months agree on what is left to assign — the 1000 is counted once.
+    expect(july.readyToAssign).toBe(400000);
+    expect(august.readyToAssign).toBe(400000);
+  });
+
+  it("never touches a category's available", () => {
+    expect(withFuture(100000).categories.get(GROCERIES)?.available).toBe(0);
+    expect(withFuture(100000).cumulativeOnBudgetFunds).toBe(500000);
+  });
+
+  it("a net release in a later month does not inflate this month", () => {
+    // Freeing up money in September cannot make it spendable in July.
+    expect(withFuture(-100000).readyToAssign).toBe(500000);
+  });
+});
+
 describe("monthly goal underfunded calc", () => {
   it("is null when the category has no target", () => {
     expect(computeGoalStatus(null, 5000)).toBeNull();
