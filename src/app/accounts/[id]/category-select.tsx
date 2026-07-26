@@ -1,15 +1,7 @@
 "use client";
 
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import type { CategoryGroupOption } from "@/lib/queries";
+import { SearchableOptionSelect, type OptionGroup } from "./searchable-option-select";
 
 /** Plain category picker — used to edit an existing transaction's category (no transfer options). */
 export function CategorySelect({
@@ -33,45 +25,26 @@ export function CategorySelect({
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  // Base UI's `Select.Value` only resolves a value to its label once the
-  // popup has mounted at least once — otherwise it shows the raw value
-  // (e.g. a numeric category id). Passing `items` lets it resolve the label
-  // up front, so the trigger shows the category name immediately.
-  const items = [
-    ...(includeReadyToAssign ? [{ value: "rta", label: "Ready to Assign" }] : []),
-    ...groups.flatMap((group) =>
-      group.categories.map((category) => ({ value: String(category.id), label: category.name }))
-    ),
+  const optionGroups: OptionGroup[] = [
+    // Ungrouped leading item: an empty heading renders no label.
+    ...(includeReadyToAssign ? [{ value: "", items: [{ value: "rta", label: "Ready to Assign" }] }] : []),
+    ...groups.map((group) => ({
+      value: group.name,
+      items: group.categories.map((category) => ({ value: String(category.id), label: category.name })),
+    })),
   ];
 
   return (
-    <Select
-      items={items}
-      value={value == null ? (includeReadyToAssign ? "rta" : "") : String(value)}
-      onValueChange={(v) => onChange(!v || v === "rta" ? null : Number(v))}
+    <SearchableOptionSelect
+      groups={optionGroups}
+      value={value == null ? (includeReadyToAssign ? "rta" : null) : String(value)}
+      onChange={(next) => onChange(next == null || next === "rta" ? null : Number(next))}
+      placeholder={placeholder}
+      searchPlaceholder="Search categories…"
+      emptyMessage="No categories match"
+      className={className}
       defaultOpen={defaultOpen}
       onOpenChange={onOpenChange}
-    >
-      <SelectTrigger className={className}>
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent>
-        {includeReadyToAssign && (
-          <SelectGroup>
-            <SelectItem value="rta">Ready to Assign</SelectItem>
-          </SelectGroup>
-        )}
-        {groups.map((group) => (
-          <SelectGroup key={group.id}>
-            <SelectLabel>{group.name}</SelectLabel>
-            {group.categories.map((category) => (
-              <SelectItem key={category.id} value={String(category.id)}>
-                {category.name}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        ))}
-      </SelectContent>
-    </Select>
+    />
   );
 }
