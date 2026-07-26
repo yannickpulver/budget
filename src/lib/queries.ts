@@ -2195,3 +2195,203 @@ export function commitSwissquoteImport(dbi: DB, accountId: number, rows: Swissqu
     return committed;
   });
 }
+
+/**
+ * Category spending stats (the `/stats` page). Aggregates raw transactions by
+ * `category_id` over a period — deliberately simpler than budget "activity":
+ * it answers "what did I spend on X" from the ledger directly and does NOT
+ * apply credit-card payment-category mechanics. Tracking accounts are excluded
+ * to match budget math (their movements aren't spending). Outflow/inflow are
+ * both reported as positive minor units; `net` is outflow − inflow (net spend).
+ */
+
+export const STATS_PERIODS = ["month", "year", "all"] as const;
+export type StatsPeriod = (typeof STATS_PERIODS)[number];
+
+export interface StatsBucket {
+  /** "YYYY-MM" for month buckets, or the payee string for this-month buckets. */
+  key: string;
+  label: string;
+  outflow: number;
+  inflow: number;
+  count: number;
+}
+
+export interface CategoryStats {
+  period: StatsPeriod;
+  totalOutflow: number;
+  totalInflow: number;
+  /** outflow − inflow: net amount spent over the period. */
+  net: number;
+  count: number;
+  /** Elapsed months in the period (for the per-month average). 0 when empty. */
+  monthsElapsed: number;
+  avgOutflowPerMonth: number;
+  /**
+   * Per-month for year/all-time. For this-month: per-payee for a single
+   * category, per-category when aggregating all categories. Top 12 for the
+   * non-month kinds.
+   */
+  buckets: StatsBucket[];
+  bucketKind: "month" | "payee" | "category";
+  currency: string;
+}
+
+/** [start, end) YYYY-MM-DD bounds for a period, or nulls for all-time. */
+function statsPeriodBounds(
+  period: StatsPeriod,
+  now: Date
+): { start: string | null; end: string | null } {
+  const y = now.getFullYear();
+  const m = now.getMonth(); // 0-based
+  if (period === "all") return { start: null, end: null };
+  if (period === "year") return { start: `${y}-01-01`, end: `${y + 1}-01-01` };
+  const startMonth = String(m + 1).padStart(2, "0");
+  const nextYear = m === 11 ? y + 1 : y;
+  const nextMonth = String(m === 11 ? 1 : m + 2).padStart(2, "0");
+  return { start: `${y}-${startMonth}-01`, end: `${nextYear}-${nextMonth}-01` };
+}
+
+/** Number of calendar months in [from, to] inclusive (YYYY-MM keys). */
+function monthSpan(from: string, to: string): number {
+  const [fy, fm] = from.split("-").map(Number);
+  const [ty, tm] = to.split("-").map(Number);
+  return (ty - fy) * 12 + (tm - fm) + 1;
+}
+
+/**
+ * `categoryId = null` aggregates across ALL categories. In that mode
+ * transactions with a null `category_id` are excluded — those are transfers
+ * (and any uncategorized rows), which aren't spending — so the all-categories
+ * total equals the sum of the per-category totals and stays consistent with
+ * the single-category view.
+ */
+export function getCategoryStats(
+  categoryId: number | null,
+  period: StatsPeriod,
+  dbi: DB = db,
+  now: Date = new Date()
+): CategoryStats {
+  const { start, end } = statsPeriodBounds(period, now);
+  const bucketKind: "month" | "payee" | "category" =
+    period !== "month" ? "month" : categoryId == null ? "category" : "payee";
+
+  const conditions = [
+    categoryId == null
+      ? sql`${schema.transactions.categoryId} is not null`
+      : eq(schema.transactions.categoryId, categoryId),
+    ne(schema.accounts.type, "tracking"),
+  ];
+  if (start != null) conditions.push(gte(schema.transactions.date, start));
+  if (end != null) conditions.push(sql`${schema.transactions.date} < ${end}`);
+
+  const groupExpr =
+    bucketKind === "month"
+      ? sql<string>`substr(${schema.transactions.date}, 1, 7)`
+      : bucketKind === "category"
+        ? sql<string>`cast(${schema.transactions.categoryId} as text)`
+        : sql<string>`${schema.transactions.payee}`;
+
+  const rows = dbi
+    .select({
+      key: groupExpr,
+      outflow: sql<number>`coalesce(sum(case when ${schema.transactions.amount} < 0 then -${schema.transactions.amount} else 0 end), 0)`,
+      inflow: sql<number>`coalesce(sum(case when ${schema.transactions.amount} > 0 then ${schema.transactions.amount} else 0 end), 0)`,
+      count: sql<number>`count(*)`,
+    })
+    .from(schema.transactions)
+    .innerJoin(schema.accounts, eq(schema.transactions.accountId, schema.accounts.id))
+    .where(and(...conditions))
+    .groupBy(groupExpr)
+    .all();
+
+  let totalOutflow = 0;
+  let totalInflow = 0;
+  let count = 0;
+  for (const r of rows) {
+    totalOutflow += r.outflow;
+    totalInflow += r.inflow;
+    count += r.count;
+  }
+
+  let buckets: StatsBucket[];
+  if (bucketKind === "month") {
+    buckets = rows
+      .map((r) => ({
+        key: r.key,
+        label: monthShortLabel(r.key),
+        outflow: r.outflow,
+        inflow: r.inflow,
+        count: r.count,
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key));
+  } else {
+    // This-month view: biggest spenders first. Payee keys are raw strings;
+    // category keys are ids resolved to names here.
+    const categoryNames =
+      bucketKind === "category"
+        ? new Map(
+            dbi
+              .select({ id: schema.categories.id, name: schema.categories.name })
+              .from(schema.categories)
+              .all()
+              .map((c) => [String(c.id), c.name] as const)
+          )
+        : null;
+    const labelFor = (key: string): string =>
+      bucketKind === "category"
+        ? (categoryNames?.get(key) ?? "(unknown)")
+        : key.trim() === ""
+          ? "(no payee)"
+          : key;
+    buckets = rows
+      .map((r) => ({
+        key: r.key,
+        label: labelFor(r.key),
+        outflow: r.outflow,
+        inflow: r.inflow,
+        count: r.count,
+      }))
+      .sort((a, b) => b.outflow - a.outflow || b.inflow - a.inflow)
+      .slice(0, 12);
+  }
+
+  // Elapsed months for the average. For year and all-time, span from the
+  // category's first active month within the period through now, inclusive —
+  // so a first transaction mid-year (or mid-history) isn't averaged over the
+  // empty leading months. `buckets` is the per-month aggregation sorted
+  // ascending here, so buckets[0].key is that first active month.
+  const nowKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  let monthsElapsed: number;
+  if (count === 0) {
+    monthsElapsed = 0;
+  } else if (period === "month") {
+    monthsElapsed = 1;
+  } else {
+    monthsElapsed = monthSpan(buckets[0].key, nowKey);
+  }
+
+  return {
+    period,
+    totalOutflow,
+    totalInflow,
+    net: totalOutflow - totalInflow,
+    count,
+    monthsElapsed,
+    avgOutflowPerMonth: monthsElapsed > 0 ? Math.round(totalOutflow / monthsElapsed) : 0,
+    buckets,
+    bucketKind,
+    currency: getCurrency(dbi),
+  };
+}
+
+const STATS_MONTH_NAMES = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/** "2026-07" -> "Jul 2026". */
+function monthShortLabel(monthKey: string): string {
+  const [year, mon] = monthKey.split("-").map(Number);
+  return `${STATS_MONTH_NAMES[mon - 1]} ${year}`;
+}
