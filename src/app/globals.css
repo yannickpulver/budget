@@ -96,3 +96,12 @@
     display: none;
   }
 }
+
+/* Scroll without a visible scrollbar. Both properties are needed: the standard
+   one covers Firefox, the pseudo-element covers Chrome/Safari. */
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
