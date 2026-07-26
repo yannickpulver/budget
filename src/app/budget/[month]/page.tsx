@@ -151,6 +151,7 @@ export default async function BudgetPage({
                       allGroups={view.groups}
                       month={month}
                       currency={view.currency}
+                      isCurrentMonth={month === today}
                     />
                   ))}
                 </div>
@@ -356,11 +357,13 @@ function Group({
   allGroups,
   month,
   currency,
+  isCurrentMonth,
 }: {
   group: GroupView;
   allGroups: GroupView[];
   month: string;
   currency: string;
+  isCurrentMonth: boolean;
 }) {
   const totals = group.categories.reduce(
     (acc, c) => ({
@@ -402,6 +405,7 @@ function Group({
             allGroups={allGroups}
             month={month}
             currency={currency}
+            isCurrentMonth={isCurrentMonth}
           />
         ))}
       </div>
@@ -414,13 +418,15 @@ function Row({
   allGroups,
   month,
   currency,
+  isCurrentMonth,
 }: {
   category: CategoryView;
   allGroups: GroupView[];
   month: string;
   currency: string;
+  isCurrentMonth: boolean;
 }) {
-  const underfunded = category.goal != null && !category.goal.met;
+  const underfunded = category.underfunded;
 
   return (
     <div className={cn(GRID, "px-2 py-0.5", underfunded && "bg-amber-50")}>
@@ -440,9 +446,15 @@ function Row({
           month={month}
           categoryId={category.id}
           monthlyTarget={category.monthlyTarget}
+          targetType={category.targetType}
+          targetDate={category.targetDate}
+          available={category.available}
+          currency={currency}
           goalMet={category.goal?.met ?? false}
+          underfunded={underfunded}
           remaining={category.goal?.remaining ?? 0}
           funded={category.goalFunded}
+          isCurrentMonth={isCurrentMonth}
         />
       </div>
       <AssignCell month={month} categoryId={category.id} assigned={category.assigned} />

@@ -49,8 +49,18 @@ export const categories = sqliteTable("categories", {
   name: text("name").notNull(),
   sort: integer("sort").notNull().default(0),
   hidden: integer("hidden", { mode: "boolean" }).notNull().default(false),
-  // Rappen (minor units). Null = no monthly assignment goal.
+  // Rappen (minor units). Null = no goal. The target amount for both goal
+  // types: "monthly" assigns this every month, "balance" saves up to this
+  // total available.
   monthlyTarget: integer("monthly_target"),
+  // "monthly" = assign the target each month; "balance" = save up to the
+  // target as total available (a trip, a big purchase).
+  targetType: text("target_type", { enum: ["monthly", "balance"] })
+    .notNull()
+    .default("monthly"),
+  // YYYY-MM. Balance goals only: the month to reach the target by, used to
+  // suggest a monthly contribution. Null = no deadline (suggest the remainder).
+  targetDate: text("target_date"),
 });
 
 export const transactions = sqliteTable("transactions", {

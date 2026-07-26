@@ -64,6 +64,13 @@
       "when": 1784541177979,
       "tag": "0008_gigantic_molly_hayes",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1784561146565,
+      "tag": "0009_daily_blink",
+      "breakpoints": true
     }
   ]
 }
