@@ -112,7 +112,7 @@ export function Sidebar({ data: initialData, undo }: { data: SidebarData; undo: 
         <UndoButtons state={undo} />
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-2 pb-3">
+      <nav className="scrollbar-none flex-1 overflow-y-auto px-2 pb-3">
         <SidebarLink href={`/budget/${currentMonthKey()}`} active={pathname.startsWith("/budget")}>
           <Wallet className="size-4" />
           Budget
