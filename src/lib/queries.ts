@@ -28,7 +28,12 @@ import {
   type MonthSnapshot,
   type TargetType,
 } from "./budget-math";
-import { computeImportHash, resolveCategoryName, type ParsedImportRow } from "./csv-import";
+import {
+  computeImportHash,
+  resolveCategoryName,
+  type ImportRowError,
+  type ParsedImportRow,
+} from "./csv-import";
 import { formatMoney } from "./currency";
 import { fetchYahooQuote, fxSymbol, isStale, toBudgetMinorUnits } from "./prices";
 import { computeSwissquoteImportHash, type ParsedStatement, type StatementEntry } from "./swissquote-import";
@@ -1554,13 +1559,70 @@ export interface ImportPreviewRow {
   categoryName: string | null;
   isDuplicate: boolean;
   importHash: string;
+  /** Counterpart account for a transfer row, or null for an ordinary transaction. */
+  transferAccountId: number | null;
+  /** Counterpart account's name, for display. */
+  transferAccountName: string | null;
+}
+
+/** Transfer rows are stored with this payee, matching `createTransfer`. */
+const TRANSFER_PAYEE = "Transfer";
+
+/**
+ * A transfer row's effective payee. Transfers are stored as `"Transfer"` like
+ * every other transfer in the app, so a re-import dedups against transfers that
+ * were entered by hand — those carry no usable `import_hash`, leaving the
+ * date+amount+payee triple as the only thing that can match. The CSV's own payee
+ * text (e.g. "Card Services AG") would defeat that, so it moves to the memo.
+ */
+function transferPayee(row: { payee: string; transferAccountName: string | null }): string {
+  return row.transferAccountName == null ? row.payee : TRANSFER_PAYEE;
+}
+
+function transferMemo(row: { payee: string; memo: string; transferAccountName: string | null }): string {
+  if (row.transferAccountName == null) return row.memo;
+  return row.memo || row.payee;
+}
+
+/**
+ * Resolve `Transfer` column names to account ids, case-insensitively. Returns
+ * one error per row whose counterpart can't be used, so the caller can reject
+ * the whole file rather than silently importing a transfer as plain spending —
+ * that would leave the counterpart account short and distort Ready to Assign.
+ */
+export function findTransferAccountErrors(
+  dbi: DB,
+  accountId: number,
+  rows: ParsedImportRow[]
+): ImportRowError[] {
+  if (!rows.some((r) => r.transferAccountName != null)) return [];
+  const accounts = dbi
+    .select({ id: schema.accounts.id, name: schema.accounts.name })
+    .from(schema.accounts)
+    .all();
+  const idByName = new Map(accounts.map((a) => [a.name.toLowerCase(), a.id]));
+  const errors: ImportRowError[] = [];
+  for (const row of rows) {
+    if (row.transferAccountName == null) continue;
+    const target = idByName.get(row.transferAccountName.toLowerCase());
+    if (target == null) {
+      errors.push({ line: row.line, message: `Unknown transfer account "${row.transferAccountName}".` });
+    } else if (target === accountId) {
+      errors.push({ line: row.line, message: `Transfer account "${row.transferAccountName}" is this account.` });
+    }
+  }
+  return errors;
 }
 
 /**
  * Build the import preview: match categories by name (case-insensitive,
- * first match wins), flag duplicates against existing transactions in this
- * account (by import_hash or by date+amount+payee) and against earlier rows
- * in the same file.
+ * first match wins), resolve `Transfer` counterpart accounts, and flag
+ * duplicates against existing transactions in this account (by import_hash or
+ * by date+amount+payee) and against earlier rows in the same file.
+ *
+ * Call `findTransferAccountErrors` first — rows whose counterpart doesn't
+ * resolve arrive here with `transferAccountId` null, which would import them as
+ * ordinary transactions.
  */
 export function buildImportPreview(dbi: DB, accountId: number, rows: ParsedImportRow[]): ImportPreviewRow[] {
   const categoryIdByName = new Map<string, number>();
@@ -1588,6 +1650,15 @@ export function buildImportPreview(dbi: DB, accountId: number, rows: ParsedImpor
   const existingTriples = new Set(existing.map((t) => `${t.date}|${t.amount}|${t.payee}`));
   const seenInBatch = new Set<string>();
 
+  const accountsById = new Map(
+    dbi
+      .select({ id: schema.accounts.id, name: schema.accounts.name })
+      .from(schema.accounts)
+      .all()
+      .map((a) => [a.id, a.name] as const)
+  );
+  const accountIdByName = new Map([...accountsById].map(([id, name]) => [name.toLowerCase(), id] as const));
+
   return rows.map((row): ImportPreviewRow => {
     const resolved = resolveCategoryName(row.categoryName);
     const categoryId = resolved.isReadyToAssign
@@ -1595,8 +1666,14 @@ export function buildImportPreview(dbi: DB, accountId: number, rows: ParsedImpor
       : resolved.name != null
         ? (categoryIdByName.get(resolved.name.toLowerCase()) ?? null)
         : null;
-    const importHash = computeImportHash(accountId, row.date, row.amount, row.payee);
-    const triple = `${row.date}|${row.amount}|${row.payee}`;
+    const transferAccountId =
+      row.transferAccountName != null
+        ? (accountIdByName.get(row.transferAccountName.toLowerCase()) ?? null)
+        : null;
+    const payee = transferPayee(row);
+    const memo = transferMemo(row);
+    const importHash = computeImportHash(accountId, row.date, row.amount, payee);
+    const triple = `${row.date}|${row.amount}|${payee}`;
     const isDuplicate = existingHashes.has(importHash) || existingTriples.has(triple) || seenInBatch.has(triple);
     seenInBatch.add(triple);
 
@@ -1605,13 +1682,15 @@ export function buildImportPreview(dbi: DB, accountId: number, rows: ParsedImpor
     return {
       line: row.line,
       date: row.date,
-      payee: row.payee,
-      memo: row.memo,
+      payee,
+      memo,
       amount: row.amount,
       categoryId,
       categoryName,
       isDuplicate,
       importHash,
+      transferAccountId,
+      transferAccountName: transferAccountId != null ? (accountsById.get(transferAccountId) ?? null) : null,
     };
   });
 }
@@ -1623,6 +1702,8 @@ export interface ImportInsertRow {
   amount: number;
   categoryId: number | null;
   importHash: string;
+  /** Counterpart account: when set, the row commits as a paired transfer instead of a plain transaction. */
+  transferAccountId?: number | null;
 }
 
 /**
@@ -1635,6 +1716,13 @@ export interface ImportInsertRow {
  * This is deliberately not a UNIQUE constraint on import content: two
  * legitimately identical transactions (same date/payee/amount) are real
  * data and must stay importable when the user checks them both.
+ *
+ * Rows carrying a `transferAccountId` become transfers: both legs are written
+ * and linked by `transferPairId`, matching `createTransfer`, so the counterpart
+ * account moves too. Only the imported leg gets the `import_hash` — the hash is
+ * keyed to this account, date, amount and payee, and the mirrored leg has the
+ * opposite amount. The returned count is the number of CSV rows, not of
+ * inserted transactions.
  */
 export function commitImport(dbi: DB, accountId: number, rows: ImportInsertRow[], batchId: string): number {
   return dbi.transaction((tx) => {
@@ -1646,20 +1734,53 @@ export function commitImport(dbi: DB, accountId: number, rows: ImportInsertRow[]
     if (existing) return existing.count;
 
     if (rows.length > 0) {
-      tx.insert(schema.transactions)
-        .values(
-          rows.map((r) => ({
-            accountId,
+      const typeById = new Map(
+        tx
+          .select({ id: schema.accounts.id, type: schema.accounts.type })
+          .from(schema.accounts)
+          .all()
+          .map((a) => [a.id, a.type] as const)
+      );
+      const values = rows.flatMap((r): (typeof schema.transactions.$inferInsert)[] => {
+        const leg = {
+          accountId,
+          date: r.date,
+          payee: r.payee,
+          categoryId: r.categoryId,
+          memo: r.memo,
+          amount: r.amount,
+          cleared: true,
+          importHash: r.importHash,
+        };
+        if (r.transferAccountId == null) return [leg];
+
+        // Same rule as createTransfer: a category only applies to the on-budget
+        // leg of a transfer that touches a tracking account.
+        const thisIsTracking = typeById.get(accountId) === "tracking";
+        const otherIsTracking = typeById.get(r.transferAccountId) === "tracking";
+        const transferPairId = crypto.randomUUID();
+        return [
+          {
+            ...leg,
+            categoryId: !thisIsTracking && otherIsTracking ? r.categoryId : null,
+            transferAccountId: r.transferAccountId,
+            transferPairId,
+          },
+          {
+            accountId: r.transferAccountId,
             date: r.date,
             payee: r.payee,
-            categoryId: r.categoryId,
+            categoryId: !otherIsTracking && thisIsTracking ? r.categoryId : null,
             memo: r.memo,
-            amount: r.amount,
+            amount: -r.amount,
             cleared: true,
-            importHash: r.importHash,
-          }))
-        )
-        .run();
+            importHash: null,
+            transferAccountId: accountId,
+            transferPairId,
+          },
+        ];
+      });
+      tx.insert(schema.transactions).values(values).run();
     }
 
     tx.insert(schema.importBatches)

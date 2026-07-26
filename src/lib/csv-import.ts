@@ -31,6 +31,14 @@ export interface ParsedImportRow {
   amount: number;
   /** Raw category name parsed from the row, or null if blank/absent. */
   categoryName: string | null;
+  /**
+   * Raw counterpart account name from the optional `Transfer` column, or null
+   * for an ordinary transaction. A non-null value makes the row a transfer:
+   * `queries.ts` resolves the name to an account and commits both legs. Bank
+   * exports don't carry this — the converter fills it in for movements between
+   * the user's own accounts (card settlements, savings top-ups).
+   */
+  transferAccountName: string | null;
 }
 
 export type ParseCsvResult =
@@ -94,8 +102,8 @@ export function resolveCategoryName(raw: string | null): ResolvedCategoryName {
 
 /**
  * Parse a bank-statement CSV in YNAB Register column format. Tolerates and
- * ignores Account/Flag columns; Category Group/Category columns are
- * optional. Any structural problem (missing required columns, no data rows)
+ * ignores Account/Flag columns; Category Group/Category and `Transfer` columns
+ * are optional. Any structural problem (missing required columns, no data rows)
  * or per-row parse failure (bad date/amount) fails the whole file — nothing
  * is ever partially imported.
  */
@@ -152,6 +160,7 @@ export function parseImportCsv(buffer: Buffer): ParseCsvResult {
         memo: (record.Memo ?? "").trim(),
         amount,
         categoryName: extractRawCategory(record),
+        transferAccountName: (record.Transfer ?? "").trim() || null,
       });
     } catch (error) {
       errors.push({ line, message: error instanceof Error ? error.message : "Could not parse row." });
