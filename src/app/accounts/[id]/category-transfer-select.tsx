@@ -1,17 +1,8 @@
 "use client";
 
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import type { CategoryGroupOption, TransferTarget } from "@/lib/queries";
 import { CategorySelect } from "./category-select";
+import { SearchableOptionSelect, type OptionGroup } from "./searchable-option-select";
 
 export type CategorySelection =
   | { kind: "rta" }
@@ -55,51 +46,32 @@ export function CategoryTransferSelect({
     value.kind === "transfer" ? transferTargets.find((a) => a.id === value.accountId) : undefined;
   const needsLinkedCategory = value.kind === "transfer" && transferTarget?.type === "tracking";
 
-  // See CategorySelect: `items` lets Select.Value resolve a label before the
-  // popup has ever been opened, instead of showing the raw encoded value.
-  const items = [
-    { value: "rta", label: "Ready to Assign" },
-    ...groups.flatMap((group) =>
-      group.categories.map((category) => ({ value: `cat:${category.id}`, label: category.name }))
-    ),
-    ...transferTargets.map((account) => ({ value: `xfer:${account.id}`, label: account.name })),
+  const optionGroups: OptionGroup[] = [
+    // Empty heading = no group label, so this sits ungrouped at the top.
+    { value: "", items: [{ value: "rta", label: "Ready to Assign" }] },
+    ...groups.map((group) => ({
+      value: group.name,
+      items: group.categories.map((category) => ({ value: `cat:${category.id}`, label: category.name })),
+    })),
+    ...(transferTargets.length > 0
+      ? [
+          {
+            value: "Transfer to/from account",
+            items: transferTargets.map((account) => ({ value: `xfer:${account.id}`, label: account.name })),
+          },
+        ]
+      : []),
   ];
 
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <Select items={items} value={encode(value)} onValueChange={onPrimaryChange}>
-        <SelectTrigger className="w-full min-w-0">
-          <SelectValue placeholder="Category" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectItem value="rta">Ready to Assign</SelectItem>
-          </SelectGroup>
-          {groups.map((group) => (
-            <SelectGroup key={group.id}>
-              <SelectLabel>{group.name}</SelectLabel>
-              {group.categories.map((category) => (
-                <SelectItem key={category.id} value={`cat:${category.id}`}>
-                  {category.name}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          ))}
-          {transferTargets.length > 0 && (
-            <>
-              <SelectSeparator />
-              <SelectGroup>
-                <SelectLabel>Transfer to/from account</SelectLabel>
-                {transferTargets.map((account) => (
-                  <SelectItem key={account.id} value={`xfer:${account.id}`}>
-                    {account.name}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </>
-          )}
-        </SelectContent>
-      </Select>
+      <SearchableOptionSelect
+        groups={optionGroups}
+        value={encode(value)}
+        onChange={onPrimaryChange}
+        searchPlaceholder="Search categories or accounts…"
+        className="w-full min-w-0"
+      />
 
       {needsLinkedCategory && (
         <CategorySelect
