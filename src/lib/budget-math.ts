@@ -187,7 +187,16 @@ export function computeCategoryActivityEntries(
   return entries;
 }
 
-/** Net movement in on-budget accounts this month (tracking accounts excluded). */
+/**
+ * Net movement in on-budget accounts this month. Two exclusions:
+ *  - Tracking accounts are off-budget entirely.
+ *  - Credit accounts, because a card's balance is *already* represented in the
+ *    budget through its payment category (spend feeds the category, payments
+ *    drain it). Counting the card balance here too would double-count it, and
+ *    since Ready to Assign is `funds − Σ available`, the two copies don't
+ *    cancel — they compound, skewing RTA by the card balance in the same
+ *    direction. Only the on-budget cash side of a card payment counts.
+ */
 export function computeOnBudgetFunds(
   transactions: TxnInput[],
   accounts: Map<number, AccountInfo>
@@ -195,7 +204,7 @@ export function computeOnBudgetFunds(
   let total = 0;
   for (const txn of transactions) {
     const account = accounts.get(txn.accountId);
-    if (!account || account.type === "tracking") continue;
+    if (!account || account.type === "tracking" || account.type === "credit") continue;
     total += txn.amount;
   }
   return total;
@@ -219,6 +228,18 @@ export function computeMonthSnapshot(params: {
    * queries.ts. Defaults to 0.
    */
   readyToAssignAdjustment?: number;
+  /**
+   * Net amount assigned in months *after* this one — YNAB's "Assigned in the
+   * Future". Money earmarked for next month is already spoken for, so it must
+   * leave this month's Ready to Assign instead of looking spendable twice.
+   * No double-count: those assignments land in their own month's
+   * `totalAvailable`, which only that month's snapshot sees.
+   *
+   * Floored at 0 by the caller's intent — a *negative* net (funds released in
+   * a later month) must not inflate this month's RTA, since money freed up in
+   * September cannot be spent in July. Defaults to 0.
+   */
+  assignedInFutureMonths?: number;
 }): MonthSnapshot {
   const {
     categoryIds,
@@ -228,6 +249,7 @@ export function computeMonthSnapshot(params: {
     cumulativeOnBudgetFundsThroughPrevMonth,
     accounts,
     readyToAssignAdjustment = 0,
+    assignedInFutureMonths = 0,
   } = params;
 
   const activity = computeCategoryActivity(monthTransactions, accounts);
@@ -248,7 +270,11 @@ export function computeMonthSnapshot(params: {
 
   return {
     categories,
-    readyToAssign: cumulativeOnBudgetFunds - totalAvailable + readyToAssignAdjustment,
+    readyToAssign:
+      cumulativeOnBudgetFunds -
+      totalAvailable -
+      Math.max(0, assignedInFutureMonths) +
+      readyToAssignAdjustment,
     cumulativeOnBudgetFunds,
   };
 }
