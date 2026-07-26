@@ -20,7 +20,7 @@ import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifi
 import { CSS } from "@dnd-kit/utilities";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronRight, GripVertical, PiggyBank, Tags, Wallet } from "lucide-react";
+import { BarChart3, ChevronRight, GripVertical, PiggyBank, Tags, Wallet } from "lucide-react";
 import { useState, useTransition } from "react";
 import {
   hideAccountFromMonthAction,
@@ -118,6 +118,10 @@ export function Sidebar({ data: initialData, undo }: { data: SidebarData; undo: 
         <SidebarLink href="/settings/categories" active={pathname.startsWith("/settings/categories")}>
           <Tags className="size-4" />
           Categories
+        </SidebarLink>
+        <SidebarLink href="/stats" active={pathname.startsWith("/stats")}>
+          <BarChart3 className="size-4" />
+          Stats
         </SidebarLink>
 
         {!hasAnyAccounts && (
