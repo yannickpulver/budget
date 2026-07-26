@@ -56,7 +56,9 @@ CREATE TABLE categories (
   name TEXT NOT NULL,
   sort INTEGER NOT NULL DEFAULT 0,
   hidden INTEGER NOT NULL DEFAULT 0,
-  monthly_target INTEGER
+  monthly_target INTEGER,
+  target_type TEXT NOT NULL DEFAULT 'monthly',
+  target_date TEXT
 );
 CREATE TABLE transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

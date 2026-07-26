@@ -13,6 +13,7 @@ import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { and, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import {
+  computeBalanceGoalStatus,
   computeCategoryActivityEntries,
   computeGoalStatus,
   computeMonthSnapshot,
@@ -25,6 +26,7 @@ import {
   type ActivityTxnInput,
   type GoalStatus,
   type MonthSnapshot,
+  type TargetType,
 } from "./budget-math";
 import { computeImportHash, resolveCategoryName, type ParsedImportRow } from "./csv-import";
 import { formatMoney } from "./currency";
@@ -44,6 +46,8 @@ export interface CategoryMeta {
   sort: number;
   hidden: boolean;
   monthlyTarget: number | null;
+  targetType: TargetType;
+  targetDate: string | null;
 }
 
 export interface GroupMeta {
@@ -125,6 +129,8 @@ export function loadBudgetData(dbi: DB): BudgetData {
       sort: schema.categories.sort,
       hidden: schema.categories.hidden,
       monthlyTarget: schema.categories.monthlyTarget,
+      targetType: schema.categories.targetType,
+      targetDate: schema.categories.targetDate,
     })
     .from(schema.categories)
     .all();
@@ -324,8 +330,13 @@ export interface CategoryView {
   activity: number;
   available: number;
   monthlyTarget: number | null;
+  targetType: TargetType;
+  /** YYYY-MM the balance goal aims to reach the target by; null = no deadline or a monthly goal. */
+  targetDate: string | null;
   goal: GoalStatus | null;
-  /** True when the monthly goal was explicitly funded this month (the "Fund" button) — met via the flag, resettable. */
+  /** Needs funding this month — drives the amber row and the "Needs funding" filter. For monthly goals this is `!goal.met`; for balance goals it's the behind-pace check. */
+  underfunded: boolean;
+  /** True when the goal was explicitly funded this month (the "Fund" button) — met via the flag, resettable. */
   goalFunded: boolean;
   /** Transactions (and, for credit-card payment categories, feed entries) behind `activity` this month — sums to it. */
   activityTransactions: ActivityEntry[];
@@ -462,8 +473,27 @@ export function getBudgetView(month: string): BudgetView {
               available: 0,
             };
           const goalFunded = fundedCategoryIds.has(category.id);
-          const goal = computeGoalStatus(category.monthlyTarget, cell.assigned, goalFunded);
-          if (goal && !goal.met) totalUnderfunded += goal.remaining;
+          let goal: GoalStatus | null;
+          let underfunded: boolean;
+          if (category.monthlyTarget == null) {
+            goal = null;
+            underfunded = false;
+          } else if (category.targetType === "balance") {
+            const balance = computeBalanceGoalStatus({
+              target: category.monthlyTarget,
+              targetDate: category.targetDate,
+              month,
+              assigned: cell.assigned,
+              available: cell.available,
+              funded: goalFunded,
+            });
+            goal = { met: balance.met, remaining: balance.remaining };
+            underfunded = balance.underfunded;
+          } else {
+            goal = computeGoalStatus(category.monthlyTarget, cell.assigned, goalFunded);
+            underfunded = goal != null && !goal.met;
+          }
+          if (underfunded && goal) totalUnderfunded += goal.remaining;
           const activityTransactions = [...(activityEntriesByCategory.get(category.id) ?? [])].sort(
             (a, b) => a.date.localeCompare(b.date) || a.id - b.id
           );
@@ -474,7 +504,10 @@ export function getBudgetView(month: string): BudgetView {
             activity: cell.activity,
             available: cell.available,
             monthlyTarget: category.monthlyTarget,
+            targetType: category.targetType,
+            targetDate: category.targetDate,
             goal,
+            underfunded,
             goalFunded,
             activityTransactions,
             avgSpend: computeAvgSpend(category.id),
@@ -508,7 +541,7 @@ export type BudgetFilterKey = (typeof BUDGET_FILTER_KEYS)[number];
 export function categoryMatchesFilter(category: CategoryView, filter: BudgetFilterKey): boolean {
   switch (filter) {
     case "underfunded":
-      return category.goal != null && !category.goal.met;
+      return category.underfunded;
     case "negative":
       return category.available < 0;
   }

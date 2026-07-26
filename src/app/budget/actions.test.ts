@@ -225,3 +225,75 @@ describe("setMonthlyTarget", () => {
     ).toBe(90000);
   });
 });
+
+describe("closeCategory", () => {
+  it("releases Available back to RTA, clears the target, and hides the category", async () => {
+    const { db } = await import("@/db");
+    const { closeCategory } = await import("./actions");
+    const { currentMonth } = await import("@/lib/queries");
+    const month = currentMonth();
+
+    const [group] = db.insert(schema.categoryGroups).values({ name: "Saving" }).returning().all();
+    const [category] = db
+      .insert(schema.categories)
+      .values({ groupId: group.id, name: "Trip", monthlyTarget: 200000, targetType: "balance", targetDate: "2025-12" })
+      .returning()
+      .all();
+    db.insert(schema.assignments).values({ month, categoryId: category.id, amount: 5000 }).run();
+
+    await closeCategory(month, category.id);
+
+    const row = db.select().from(schema.categories).where(eq(schema.categories.id, category.id)).get();
+    expect(row?.hidden).toBe(true);
+    expect(row?.monthlyTarget).toBeNull();
+    expect(row?.targetType).toBe("monthly");
+    expect(row?.targetDate).toBeNull();
+    // The 5000 that was Available is un-assigned (released to Ready to Assign).
+    const assignment = db.select().from(schema.assignments).all().find((r) => r.categoryId === category.id);
+    expect(assignment?.amount).toBe(0);
+  });
+
+  it("is a no-op from a month that isn't the current month", async () => {
+    const { db } = await import("@/db");
+    const { closeCategory } = await import("./actions");
+
+    const [group] = db.insert(schema.categoryGroups).values({ name: "Saving" }).returning().all();
+    const [category] = db
+      .insert(schema.categories)
+      .values({ groupId: group.id, name: "Trip" })
+      .returning()
+      .all();
+    db.insert(schema.assignments).values({ month: "2020-01", categoryId: category.id, amount: 5000 }).run();
+
+    await closeCategory("2020-01", category.id);
+
+    const row = db.select().from(schema.categories).where(eq(schema.categories.id, category.id)).get();
+    expect(row?.hidden).toBe(false);
+    const assignment = db.select().from(schema.assignments).all().find((r) => r.categoryId === category.id);
+    expect(assignment?.amount).toBe(5000);
+  });
+
+  it("is a no-op when Available is negative (overspent)", async () => {
+    const { db } = await import("@/db");
+    const { closeCategory } = await import("./actions");
+    const { currentMonth } = await import("@/lib/queries");
+    const month = currentMonth();
+
+    const [account] = db.insert(schema.accounts).values({ name: "Checking", type: "checking" }).returning().all();
+    const [group] = db.insert(schema.categoryGroups).values({ name: "Saving" }).returning().all();
+    const [category] = db
+      .insert(schema.categories)
+      .values({ groupId: group.id, name: "Trip" })
+      .returning()
+      .all();
+    // Spend with nothing assigned drives Available negative.
+    db.insert(schema.transactions)
+      .values({ accountId: account.id, date: `${month}-15`, payee: "Shop", categoryId: category.id, amount: -5000, cleared: true })
+      .run();
+
+    await closeCategory(month, category.id);
+
+    const row = db.select().from(schema.categories).where(eq(schema.categories.id, category.id)).get();
+    expect(row?.hidden).toBe(false);
+  });
+});
