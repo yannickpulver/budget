@@ -1,7 +1,7 @@
 "use client";
 
 import { Upload } from "lucide-react";
-import { useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -26,9 +26,10 @@ interface RowState extends ImportPreviewRowDto {
 }
 
 /**
- * "Import CSV" flow for an account's register: upload -> server-parsed
- * preview (NEW/DUPLICATE per row, toggleable) -> confirm inserts the
- * checked rows. Parse errors block the whole file — nothing is inserted.
+ * "Import CSV" flow for an account's register: upload — via the file picker or
+ * by dropping a CSV anywhere on the account page — -> server-parsed preview
+ * (NEW/DUPLICATE per row, toggleable) -> confirm inserts the checked rows.
+ * Parse errors block the whole file — nothing is inserted.
  */
 export function ImportCsvDialog({ accountId, currency }: { accountId: number; currency: string }) {
   const [open, setOpen] = useState(false);
@@ -39,6 +40,9 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
   const [importedCount, setImportedCount] = useState<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Children fire their own dragenter/dragleave as the cursor crosses them, so a
+  // plain boolean flickers. Count enters minus leaves instead.
+  const [dragDepth, setDragDepth] = useState(0);
 
   function reset() {
     setErrors(null);
@@ -54,24 +58,78 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
     setOpen(next);
   }
 
-  function onFileChosen(file: File) {
-    setFormError(null);
-    setErrors(null);
-    setRows(null);
-    setBatchId(null);
-    setImportedCount(null);
-    const formData = new FormData();
-    formData.append("file", file);
-    startTransition(async () => {
-      const outcome = await previewImportAction(accountId, formData);
-      if (!outcome.ok) {
-        setErrors(outcome.errors);
+  const onFileChosen = useCallback(
+    (file: File) => {
+      setFormError(null);
+      setErrors(null);
+      setRows(null);
+      setBatchId(null);
+      setImportedCount(null);
+      // The file input filters on `accept`, but a dropped file can be anything.
+      if (!/\.csv$/i.test(file.name) && file.type !== "text/csv") {
+        setErrors([{ line: 0, message: `"${file.name}" is not a CSV file.` }]);
         return;
       }
-      setRows(outcome.rows.map((r) => ({ ...r, checked: !r.isDuplicate })));
-      setBatchId(outcome.batchId);
-    });
-  }
+      const formData = new FormData();
+      formData.append("file", file);
+      startTransition(async () => {
+        const outcome = await previewImportAction(accountId, formData);
+        if (!outcome.ok) {
+          setErrors(outcome.errors);
+          return;
+        }
+        setRows(outcome.rows.map((r) => ({ ...r, checked: !r.isDuplicate })));
+        setBatchId(outcome.batchId);
+      });
+    },
+    [accountId]
+  );
+
+  /**
+   * Dropping a CSV anywhere on the account page starts the same flow as the file
+   * picker. Listeners sit on `window` so the whole page is the target rather than
+   * just the dialog; this component is mounted on exactly one account's page, so
+   * a drop always imports into the account being viewed.
+   */
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes("Files") ?? false;
+
+    function onDragEnter(e: DragEvent) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setDragDepth((d) => d + 1);
+    }
+    // Without preventDefault the browser navigates to the dropped file.
+    function onDragOver(e: DragEvent) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+    }
+    function onDragLeave(e: DragEvent) {
+      if (!hasFiles(e)) return;
+      setDragDepth((d) => Math.max(0, d - 1));
+    }
+    function onDrop(e: DragEvent) {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setDragDepth(0);
+      const file = e.dataTransfer?.files?.[0];
+      if (!file) return;
+      // Bypasses onOpenChange (and so its reset) — onFileChosen already cleared state.
+      setOpen(true);
+      onFileChosen(file);
+    }
+
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+  }, [onFileChosen]);
 
   function toggleRow(line: number) {
     setRows((prev) => prev && prev.map((r) => (r.line === line ? { ...r, checked: !r.checked } : r)));
@@ -90,6 +148,7 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
           amount: r.amount,
           categoryId: r.categoryId,
           importHash: r.importHash,
+          transferAccountId: r.transferAccountId,
         })),
         batchId
       );
@@ -105,130 +164,146 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
   const checkedCount = rows?.filter((r) => r.checked).length ?? 0;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogTrigger render={<Button size="sm" variant="outline" />}>
-        <Upload className="size-3.5" />
-        Import CSV
-      </DialogTrigger>
-      <DialogContent className="max-w-full sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>Import CSV</DialogTitle>
-        </DialogHeader>
-
-        {!errors && !rows && importedCount === null && (
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-muted-foreground">
-              Upload a CSV in YNAB Register column format (Date, Payee, Memo, Outflow, Inflow). Account, Flag and
-              category columns are optional.
-            </p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv,text/csv"
-              disabled={pending}
-              onChange={(e) => {
-                const file = e.currentTarget.files?.[0];
-                if (file) onFileChosen(file);
-              }}
-              className="text-sm text-foreground file:mr-3 file:h-7 file:rounded-md file:border file:border-border file:bg-background file:px-2.5 file:text-sm file:font-medium hover:file:bg-muted"
-            />
-            {pending && <p className="text-xs text-muted-foreground">Parsing…</p>}
+    <>
+      {dragDepth > 0 && (
+        // pointer-events-none: the overlay must not become the drop target itself.
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-6 backdrop-blur-sm">
+          <div className="flex items-center gap-2 rounded-lg border-2 border-dashed border-border bg-background px-6 py-4 text-sm font-medium">
+            <Upload className="size-4" />
+            Drop a CSV to import into this account
           </div>
-        )}
+        </div>
+      )}
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogTrigger render={<Button size="sm" variant="outline" />}>
+          <Upload className="size-3.5" />
+          Import CSV
+        </DialogTrigger>
+        <DialogContent className="max-w-full sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Import CSV</DialogTitle>
+          </DialogHeader>
 
-        {errors && (
-          <div className="flex flex-col gap-2">
-            <p className="text-sm text-destructive">Could not import — nothing was added. Fix these and try again:</p>
-            <ul className="max-h-64 overflow-y-auto rounded-md border border-border text-xs">
-              {errors.map((e, i) => (
-                <li key={i} className="border-b border-border/60 px-2.5 py-1.5 last:border-b-0">
-                  {e.line > 0 ? `Line ${e.line}: ` : ""}
-                  {e.message}
-                </li>
-              ))}
-            </ul>
-            <Button size="sm" variant="outline" onClick={reset} className="self-start">
-              Try another file
-            </Button>
-          </div>
-        )}
-
-        {rows && (
-          <div className="flex flex-col gap-2">
-            <div className="max-h-[28rem] overflow-y-auto rounded-md border border-border">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-muted text-muted-foreground uppercase">
-                  <tr>
-                    <th className="w-8 px-2.5 py-1.5" />
-                    <th className="px-2.5 py-1.5 text-left font-medium">Status</th>
-                    <th className="px-2.5 py-1.5 text-left font-medium">Date</th>
-                    <th className="px-2.5 py-1.5 text-left font-medium">Payee</th>
-                    <th className="px-2.5 py-1.5 text-left font-medium">Category</th>
-                    <th className="px-2.5 py-1.5 text-left font-medium">Memo</th>
-                    <th className="px-2.5 py-1.5 text-right font-medium">Amount</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/60">
-                  {rows.map((r) => (
-                    <tr key={r.line} className={cn(!r.checked && "opacity-50")}>
-                      <td className="px-2.5 py-1.5">
-                        <input
-                          type="checkbox"
-                          checked={r.checked}
-                          onChange={() => toggleRow(r.line)}
-                          aria-label={`Include row ${r.line}`}
-                        />
-                      </td>
-                      <td className="px-2.5 py-1.5">
-                        <span
-                          className={cn(
-                            "rounded px-1.5 py-0.5 text-[10px] font-medium uppercase",
-                            r.isDuplicate ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
-                          )}
-                        >
-                          {r.isDuplicate ? "Duplicate" : "New"}
-                        </span>
-                      </td>
-                      <td className="px-2.5 py-1.5 tabular-nums whitespace-nowrap">{r.date}</td>
-                      <td className="max-w-40 truncate px-2.5 py-1.5" title={r.payee}>
-                        {r.payee || "—"}
-                      </td>
-                      <td className="max-w-32 truncate px-2.5 py-1.5 text-muted-foreground" title={r.categoryName ?? undefined}>
-                        {r.categoryName ?? "—"}
-                      </td>
-                      <td className="max-w-40 truncate px-2.5 py-1.5 text-muted-foreground" title={r.memo}>
-                        {r.memo || "—"}
-                      </td>
-                      <td className="px-2.5 py-1.5 text-right tabular-nums whitespace-nowrap">
-                        {formatCurrency(r.amount, currency)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          {!errors && !rows && importedCount === null && (
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-muted-foreground">
+                Upload a CSV in YNAB Register column format (Date, Payee, Memo, Outflow, Inflow), or drop one anywhere
+                on this page. Account, Flag and category columns are optional. A{" "}
+                <span className="font-medium">Transfer</span> column naming another account turns that row into a
+                transfer — both sides are booked.
+              </p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                disabled={pending}
+                onChange={(e) => {
+                  const file = e.currentTarget.files?.[0];
+                  if (file) onFileChosen(file);
+                }}
+                className="text-sm text-foreground file:mr-3 file:h-7 file:rounded-md file:border file:border-border file:bg-background file:px-2.5 file:text-sm file:font-medium hover:file:bg-muted"
+              />
+              {pending && <p className="text-xs text-muted-foreground">Parsing…</p>}
             </div>
-            <p className="text-xs text-muted-foreground">
-              {rows.length} row{rows.length === 1 ? "" : "s"} parsed, {checkedCount} selected to import.
-            </p>
-            {formError && <p className="text-sm text-destructive">{formError}</p>}
-          </div>
-        )}
-
-        {importedCount !== null && (
-          <p className="text-sm">
-            Imported {importedCount} transaction{importedCount === 1 ? "" : "s"}.
-          </p>
-        )}
-
-        <DialogFooter>
-          <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
-          {rows && (
-            <Button onClick={confirm} disabled={pending || checkedCount === 0}>
-              {pending ? "Importing…" : `Import ${checkedCount} transaction${checkedCount === 1 ? "" : "s"}`}
-            </Button>
           )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+
+          {errors && (
+            <div className="flex flex-col gap-2">
+              <p className="text-sm text-destructive">Could not import — nothing was added. Fix these and try again:</p>
+              <ul className="max-h-64 overflow-y-auto rounded-md border border-border text-xs">
+                {errors.map((e, i) => (
+                  <li key={i} className="border-b border-border/60 px-2.5 py-1.5 last:border-b-0">
+                    {e.line > 0 ? `Line ${e.line}: ` : ""}
+                    {e.message}
+                  </li>
+                ))}
+              </ul>
+              <Button size="sm" variant="outline" onClick={reset} className="self-start">
+                Try another file
+              </Button>
+            </div>
+          )}
+
+          {rows && (
+            <div className="flex flex-col gap-2">
+              <div className="max-h-[28rem] overflow-y-auto rounded-md border border-border">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-muted text-muted-foreground uppercase">
+                    <tr>
+                      <th className="w-8 px-2.5 py-1.5" />
+                      <th className="px-2.5 py-1.5 text-left font-medium">Status</th>
+                      <th className="px-2.5 py-1.5 text-left font-medium">Date</th>
+                      <th className="px-2.5 py-1.5 text-left font-medium">Payee</th>
+                      <th className="px-2.5 py-1.5 text-left font-medium">Category</th>
+                      <th className="px-2.5 py-1.5 text-left font-medium">Memo</th>
+                      <th className="px-2.5 py-1.5 text-right font-medium">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/60">
+                    {rows.map((r) => (
+                      <tr key={r.line} className={cn(!r.checked && "opacity-50")}>
+                        <td className="px-2.5 py-1.5">
+                          <input
+                            type="checkbox"
+                            checked={r.checked}
+                            onChange={() => toggleRow(r.line)}
+                            aria-label={`Include row ${r.line}`}
+                          />
+                        </td>
+                        <td className="px-2.5 py-1.5">
+                          <span
+                            className={cn(
+                              "rounded px-1.5 py-0.5 text-[10px] font-medium uppercase",
+                              r.isDuplicate ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
+                            )}
+                          >
+                            {r.isDuplicate ? "Duplicate" : "New"}
+                          </span>
+                        </td>
+                        <td className="px-2.5 py-1.5 tabular-nums whitespace-nowrap">{r.date}</td>
+                        <td className="max-w-40 truncate px-2.5 py-1.5" title={r.payee}>
+                          {r.payee || "—"}
+                        </td>
+                        <td
+                          className="max-w-32 truncate px-2.5 py-1.5 text-muted-foreground"
+                          title={r.transferAccountName ?? r.categoryName ?? undefined}
+                        >
+                          {r.transferAccountName != null ? `→ ${r.transferAccountName}` : (r.categoryName ?? "—")}
+                        </td>
+                        <td className="max-w-40 truncate px-2.5 py-1.5 text-muted-foreground" title={r.memo}>
+                          {r.memo || "—"}
+                        </td>
+                        <td className="px-2.5 py-1.5 text-right tabular-nums whitespace-nowrap">
+                          {formatCurrency(r.amount, currency)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {rows.length} row{rows.length === 1 ? "" : "s"} parsed, {checkedCount} selected to import.
+              </p>
+              {formError && <p className="text-sm text-destructive">{formError}</p>}
+            </div>
+          )}
+
+          {importedCount !== null && (
+            <p className="text-sm">
+              Imported {importedCount} transaction{importedCount === 1 ? "" : "s"}.
+            </p>
+          )}
+
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
+            {rows && (
+              <Button onClick={confirm} disabled={pending || checkedCount === 0}>
+                {pending ? "Importing…" : `Import ${checkedCount} transaction${checkedCount === 1 ? "" : "s"}`}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

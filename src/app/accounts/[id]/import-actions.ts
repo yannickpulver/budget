@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { db } from "@/db";
 import { parseImportCsv, type ImportRowError } from "@/lib/csv-import";
-import { buildImportPreview, commitImport, type ImportPreviewRow } from "@/lib/queries";
+import { buildImportPreview, commitImport, findTransferAccountErrors, type ImportPreviewRow } from "@/lib/queries";
 import { withUndoStep } from "@/lib/undo";
 import { refresh } from "../refresh";
 
@@ -30,6 +30,12 @@ export async function previewImportAction(accountId: number, formData: FormData)
   const parsed = parseImportCsv(buffer);
   if (!parsed.ok) return { ok: false, errors: parsed.errors };
 
+  // Reject the file outright when a Transfer column names an account we can't
+  // resolve — importing those rows as ordinary transactions would leave the
+  // counterpart account short.
+  const transferErrors = findTransferAccountErrors(db, accountId, parsed.rows);
+  if (transferErrors.length > 0) return { ok: false, errors: transferErrors };
+
   const rows = buildImportPreview(db, accountId, parsed.rows);
   return { ok: true, rows, batchId: randomUUID() };
 }
@@ -41,6 +47,7 @@ export interface ImportRowInput {
   amount: number;
   categoryId: number | null;
   importHash: string;
+  transferAccountId?: number | null;
 }
 
 export type ConfirmImportResult = { ok: true; count: number } | { ok: false; error: string };

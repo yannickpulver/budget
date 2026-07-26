@@ -8,7 +8,7 @@ import {
   parseImportCsv,
   resolveCategoryName,
 } from "./csv-import";
-import { buildImportPreview, commitImport } from "./queries";
+import { buildImportPreview, commitImport, findTransferAccountErrors } from "./queries";
 
 /**
  * Ongoing CSV import: pure parsing/hashing (no DB) plus the DB-backed
@@ -74,6 +74,19 @@ describe("parseImportCsv", () => {
     expect(result.rows).toHaveLength(2);
     expect(result.rows[0]).toMatchObject({ date: "2025-03-15", payee: "Coop", memo: "Groceries", amount: -4250 });
     expect(result.rows[1]).toMatchObject({ date: "2025-03-16", payee: "Employer", amount: 500000 });
+  });
+
+  it("reads the optional Transfer column, leaving it null when absent or blank", () => {
+    const csv = Buffer.from(
+      "Date,Payee,Memo,Outflow,Inflow,Transfer\n" +
+        "21.07.2026,Viseca Card Services,,CHF 3257.75,,Cumulus Credit Card\n" +
+        "22.07.2026,Coop,,CHF 42.50,,\n"
+    );
+    const result = parseImportCsv(csv);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.rows[0].transferAccountName).toBe("Cumulus Credit Card");
+    expect(result.rows[1].transferAccountName).toBeNull();
   });
 
   it("tolerates and ignores Account/Flag columns, and reads Category Group/Category", () => {
@@ -199,12 +212,16 @@ CREATE TABLE import_batches (
 `;
 
 const CHECKING = 1;
+const SAVINGS = 2;
+const BROKERAGE = 3;
 const GROCERIES = 10;
 
 function seed() {
   sqlite.exec(DDL);
   sqlite.exec(`
     INSERT INTO accounts (id, name, type) VALUES (${CHECKING}, 'Checking', 'checking');
+    INSERT INTO accounts (id, name, type) VALUES (${SAVINGS}, 'Savings', 'savings');
+    INSERT INTO accounts (id, name, type) VALUES (${BROKERAGE}, 'Brokerage', 'tracking');
     INSERT INTO category_groups (id, name) VALUES (1, 'Spending');
     INSERT INTO categories (id, group_id, name) VALUES (${GROCERIES}, 1, 'Groceries');
   `);
@@ -276,9 +293,8 @@ describe("buildImportPreview", () => {
 
   it("does not flag a matching transaction in a different account", () => {
     const dbi = makeDb();
-    sqlite.exec(`INSERT INTO accounts (id, name, type) VALUES (2, 'Savings', 'savings')`);
     sqlite.exec(
-      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES (2, '2025-03-15', 'Coop', -4250, 1)`
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES (${SAVINGS}, '2025-03-15', 'Coop', -4250, 1)`
     );
     const csv = parseImportCsv(Buffer.from("Date,Payee,Memo,Outflow,Inflow\n15.03.2025,Coop,,CHF 42.50,\n"));
     if (!csv.ok) throw new Error("expected parse to succeed");
@@ -431,6 +447,7 @@ describe("commitImport", () => {
         amount: r.amount,
         categoryId: r.categoryId,
         importHash: r.importHash,
+        transferAccountId: r.transferAccountId,
       })),
       "batch-1"
     );
@@ -438,5 +455,144 @@ describe("commitImport", () => {
 
     const total = sqlite.prepare("SELECT COUNT(*) as c FROM transactions").get() as { c: number };
     expect(total.c).toBe(2); // seeded row + the one new import
+  });
+});
+
+describe("importing transfers", () => {
+  function previewOf(csv: string, accountId = CHECKING) {
+    const parsed = parseImportCsv(Buffer.from(csv));
+    if (!parsed.ok) throw new Error(`expected parse to succeed: ${JSON.stringify(parsed.errors)}`);
+    return { preview: buildImportPreview(makeDb(), accountId, parsed.rows) };
+  }
+
+  it("resolves the counterpart account case-insensitively and stores the row as a Transfer", () => {
+    const { preview } = previewOf("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca,,CHF 100.00,,savings\n");
+    expect(preview[0]).toMatchObject({
+      transferAccountId: SAVINGS,
+      transferAccountName: "Savings",
+      // Payee becomes "Transfer" (app convention); the CSV's payee moves to memo.
+      payee: "Transfer",
+      memo: "Viseca",
+      amount: -10000,
+    });
+  });
+
+  it("keeps an explicit memo and does not overwrite it with the payee", () => {
+    const { preview } = previewOf(
+      "Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca,Card bill,CHF 100.00,,Savings\n"
+    );
+    expect(preview[0].memo).toBe("Card bill");
+  });
+
+  it("commits both legs, linked by transferPairId, with the hash only on the imported leg", () => {
+    const dbi = makeDb();
+    const parsed = parseImportCsv(
+      Buffer.from("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca,,CHF 100.00,,Savings\n")
+    );
+    if (!parsed.ok) throw new Error("expected parse to succeed");
+    const preview = buildImportPreview(dbi, CHECKING, parsed.rows);
+    const count = commitImport(dbi, CHECKING, preview, "batch-t");
+
+    expect(count).toBe(1); // one CSV row...
+    const legs = sqlite
+      .prepare(
+        "SELECT account_id, amount, payee, transfer_account_id, transfer_pair_id, import_hash FROM transactions ORDER BY account_id"
+      )
+      .all() as Array<{
+      account_id: number;
+      amount: number;
+      payee: string;
+      transfer_account_id: number;
+      transfer_pair_id: string;
+      import_hash: string | null;
+    }>;
+    expect(legs).toHaveLength(2); // ...two transactions
+    expect(legs[0]).toMatchObject({
+      account_id: CHECKING,
+      amount: -10000,
+      transfer_account_id: SAVINGS,
+      payee: "Transfer",
+    });
+    expect(legs[1]).toMatchObject({
+      account_id: SAVINGS,
+      amount: 10000,
+      transfer_account_id: CHECKING,
+      import_hash: null,
+    });
+    expect(legs[0].transfer_pair_id).toBe(legs[1].transfer_pair_id);
+    expect(legs[0].import_hash).not.toBeNull();
+  });
+
+  it("flags a transfer already entered by hand as a duplicate, despite no import_hash", () => {
+    const dbi = makeDb();
+    // How createTransfer writes it: payee "Transfer", no import_hash.
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared, transfer_account_id)
+       VALUES (${CHECKING}, '2026-07-21', 'Transfer', -10000, 1, ${SAVINGS})`
+    );
+    const parsed = parseImportCsv(
+      Buffer.from("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca Card Services,,CHF 100.00,,Savings\n")
+    );
+    if (!parsed.ok) throw new Error("expected parse to succeed");
+    expect(buildImportPreview(dbi, CHECKING, parsed.rows)[0].isDuplicate).toBe(true);
+  });
+
+  it("applies a category only to the on-budget leg when the other side is tracking", () => {
+    const dbi = makeDb();
+    const parsed = parseImportCsv(
+      Buffer.from("Date,Payee,Memo,Outflow,Inflow,Category,Transfer\n21.07.2026,Buy,,CHF 100.00,,Groceries,Brokerage\n")
+    );
+    if (!parsed.ok) throw new Error("expected parse to succeed");
+    commitImport(dbi, CHECKING, buildImportPreview(dbi, CHECKING, parsed.rows), "batch-tr");
+
+    const legs = sqlite
+      .prepare("SELECT account_id, category_id FROM transactions ORDER BY account_id")
+      .all() as Array<{ account_id: number; category_id: number | null }>;
+    expect(legs).toEqual([
+      { account_id: CHECKING, category_id: GROCERIES },
+      { account_id: BROKERAGE, category_id: null },
+    ]);
+  });
+
+  it("drops the category on a transfer between two on-budget accounts", () => {
+    const dbi = makeDb();
+    const parsed = parseImportCsv(
+      Buffer.from("Date,Payee,Memo,Outflow,Inflow,Category,Transfer\n21.07.2026,Move,,CHF 100.00,,Groceries,Savings\n")
+    );
+    if (!parsed.ok) throw new Error("expected parse to succeed");
+    commitImport(dbi, CHECKING, buildImportPreview(dbi, CHECKING, parsed.rows), "batch-on");
+
+    const cats = sqlite.prepare("SELECT category_id FROM transactions").all() as Array<{ category_id: number | null }>;
+    expect(cats).toEqual([{ category_id: null }, { category_id: null }]);
+  });
+});
+
+describe("findTransferAccountErrors", () => {
+  function rowsOf(csv: string) {
+    const parsed = parseImportCsv(Buffer.from(csv));
+    if (!parsed.ok) throw new Error("expected parse to succeed");
+    return parsed.rows;
+  }
+
+  it("rejects an unknown counterpart account rather than importing it as spending", () => {
+    const dbi = makeDb();
+    const rows = rowsOf("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca,,CHF 100.00,,Nope\n");
+    expect(findTransferAccountErrors(dbi, CHECKING, rows)).toEqual([
+      { line: 2, message: 'Unknown transfer account "Nope".' },
+    ]);
+  });
+
+  it("rejects a transfer pointing at the account being imported into", () => {
+    const dbi = makeDb();
+    const rows = rowsOf("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca,,CHF 100.00,,Checking\n");
+    expect(findTransferAccountErrors(dbi, CHECKING, rows)).toEqual([
+      { line: 2, message: 'Transfer account "Checking" is this account.' },
+    ]);
+  });
+
+  it("returns nothing for a file with no Transfer column", () => {
+    const dbi = makeDb();
+    const rows = rowsOf("Date,Payee,Memo,Outflow,Inflow\n21.07.2026,Coop,,CHF 42.50,\n");
+    expect(findTransferAccountErrors(dbi, CHECKING, rows)).toEqual([]);
   });
 });
