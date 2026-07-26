@@ -104,7 +104,9 @@ export function Sidebar({ data: initialData, undo }: { data: SidebarData; undo: 
   }
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-sidebar">
+    // Sticky + h-screen so the sidebar stays put while the main list scrolls;
+    // the nav below is the scroll container for long account lists.
+    <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col border-r border-border bg-sidebar">
       <div className="flex items-center justify-between px-4 py-4">
         <span className="text-sm font-semibold tracking-tight">budget</span>
         <UndoButtons state={undo} />

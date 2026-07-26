@@ -72,7 +72,14 @@ export default async function AccountPage({
       </div>
 
       <div className="flex-1 px-4 pb-4">
-        <div className={cn(REGISTER_GRID, "px-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase")}>
+        <div
+          className={cn(
+            REGISTER_GRID,
+            // Sticky so the column labels survive scrolling a long register.
+            // Opaque background, or rows would show through underneath.
+            "sticky top-0 z-20 bg-background px-2 pt-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase"
+          )}
+        >
           <div>Date</div>
           <div>Payee</div>
           <div>Category</div>
