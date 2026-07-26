@@ -811,6 +811,8 @@ export interface RegisterPage {
   total: number;
   page: number;
   pageSize: number;
+  /** Rows in this account with no category and no transfer, ignoring the current search/filter. */
+  uncategorizedTotal: number;
 }
 
 const REGISTER_PAGE_SIZE = 100;
@@ -832,7 +834,7 @@ function registerRowMatches(row: RegisterRow, search: string): boolean {
  */
 export function getAccountRegister(
   accountId: number,
-  opts: { search?: string; page?: number } = {},
+  opts: { search?: string; page?: number; uncategorizedOnly?: boolean } = {},
   dbi: DB = db
 ): RegisterPage {
   const page = Math.max(1, opts.page ?? 1);
@@ -864,7 +866,12 @@ export function getAccountRegister(
       transferAccountName: r.transferAccountName ?? null,
     }));
 
-  const filtered = search === "" ? rows : rows.filter((r) => registerRowMatches(r, search));
+  // Transfers carry no category by design, so including them would bury the rows
+  // that actually need attention.
+  const scoped = opts.uncategorizedOnly
+    ? rows.filter((r) => r.categoryId == null && r.transferAccountId == null)
+    : rows;
+  const filtered = search === "" ? scoped : scoped.filter((r) => registerRowMatches(r, search));
   const start = (page - 1) * REGISTER_PAGE_SIZE;
 
   return {
@@ -872,6 +879,7 @@ export function getAccountRegister(
     total: filtered.length,
     page,
     pageSize: REGISTER_PAGE_SIZE,
+    uncategorizedTotal: rows.filter((r) => r.categoryId == null && r.transferAccountId == null).length,
   };
 }
 

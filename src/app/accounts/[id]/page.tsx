@@ -19,6 +19,7 @@ import { AddTransactionRow } from "./add-transaction-row";
 import { REGISTER_GRID } from "./grid";
 import { HoldingsSection } from "./holdings-section";
 import { SearchBox } from "./search-box";
+import { UncategorizedFilter } from "./uncategorized-filter";
 import { TransactionRow } from "./transaction-row";
 
 export async function generateMetadata({
@@ -36,7 +37,7 @@ export default async function AccountPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ search?: string; page?: string }>;
+  searchParams: Promise<{ search?: string; page?: string; uncategorized?: string }>;
 }) {
   const { id: idParam } = await params;
   const id = Number(idParam);
@@ -45,10 +46,11 @@ export default async function AccountPage({
   const detail = getAccountDetail(id, db);
   if (!detail) notFound();
 
-  const { search, page: pageParam } = await searchParams;
+  const { search, page: pageParam, uncategorized } = await searchParams;
   const page = Math.max(1, Number(pageParam) || 1);
+  const uncategorizedOnly = uncategorized === "1";
 
-  const register = getAccountRegister(id, { search, page }, db);
+  const register = getAccountRegister(id, { search, page, uncategorizedOnly }, db);
   const groups = getCategoryOptions(db);
   const transferTargets = getTransferTargets(id, db);
   const payeeSuggestions = getPayeeSuggestions(db);
@@ -65,7 +67,10 @@ export default async function AccountPage({
       {holdingsView && <HoldingsSection accountId={id} view={holdingsView} />}
 
       <div className="flex items-center justify-between gap-4 px-4 py-3">
-        <SearchBox />
+        <div className="flex min-w-0 items-center gap-2">
+          <SearchBox />
+          <UncategorizedFilter active={uncategorizedOnly} count={register.uncategorizedTotal} />
+        </div>
         <div className="text-xs text-muted-foreground">
           {register.total} transaction{register.total === 1 ? "" : "s"}
         </div>
