@@ -90,6 +90,8 @@ export interface BudgetData {
   categories: CategoryMeta[];
   categoryIds: number[];
   assignmentsByMonth: Map<string, Map<number, number>>;
+  /** Net assigned per month, across all categories — feeds "Assigned in the Future". */
+  assignedTotalByMonth: Map<string, number>;
   txnsByMonth: Map<string, ActivityTxnInput[]>;
   earliestMonth: string | null;
   currency: string;
@@ -141,6 +143,7 @@ export function loadBudgetData(dbi: DB): BudgetData {
     .all();
 
   const assignmentsByMonth = new Map<string, Map<number, number>>();
+  const assignedTotalByMonth = new Map<string, number>();
   for (const row of dbi.select().from(schema.assignments).all()) {
     let monthMap = assignmentsByMonth.get(row.month);
     if (!monthMap) {
@@ -148,6 +151,7 @@ export function loadBudgetData(dbi: DB): BudgetData {
       assignmentsByMonth.set(row.month, monthMap);
     }
     monthMap.set(row.categoryId, row.amount);
+    assignedTotalByMonth.set(row.month, (assignedTotalByMonth.get(row.month) ?? 0) + row.amount);
   }
 
   const txnsByMonth = new Map<string, ActivityTxnInput[]>();
@@ -197,6 +201,7 @@ export function loadBudgetData(dbi: DB): BudgetData {
     categories,
     categoryIds: categories.map((c) => c.id),
     assignmentsByMonth,
+    assignedTotalByMonth,
     txnsByMonth,
     earliestMonth,
     currency: getSetting("currency") ?? DEFAULT_CURRENCY,
@@ -233,6 +238,37 @@ const ZERO_SNAPSHOT: MonthSnapshot = {
   readyToAssign: 0,
   cumulativeOnBudgetFunds: 0,
 };
+
+/**
+ * Net assigned across every month strictly after `month` — YNAB's "Assigned in
+ * the Future", subtracted from that month's Ready to Assign.
+ *
+ * Only meaningful from the *current* month onward: for a past month, every
+ * later month's assignments are already history, and subtracting them would
+ * bury an old Ready to Assign under years of subsequent budgeting rather than
+ * showing what was actually on the table back then. Callers gate on that — see
+ * `assignedInFutureMonthsFor`.
+ */
+export function assignedAfterMonth(
+  assignedTotalByMonth: Map<string, number>,
+  month: string
+): number {
+  let total = 0;
+  for (const [m, amount] of assignedTotalByMonth) {
+    if (m > month) total += amount;
+  }
+  return total;
+}
+
+/** Zero for past months (preserve history), otherwise the future-assigned total. */
+export function assignedInFutureMonthsFor(
+  assignedTotalByMonth: Map<string, number>,
+  month: string,
+  thisMonth: string
+): number {
+  if (month < thisMonth) return 0;
+  return assignedAfterMonth(assignedTotalByMonth, month);
+}
 
 /**
  * Incremental snapshot cache. `getSnapshot(M)` returns the memoized month or
@@ -299,6 +335,11 @@ export class SnapshotStore {
         cumulativeOnBudgetFundsThroughPrevMonth: this.cursor.cumulativeFunds,
         accounts: data.accounts,
         readyToAssignAdjustment,
+        assignedInFutureMonths: assignedInFutureMonthsFor(
+          data.assignedTotalByMonth,
+          m,
+          currentMonth()
+        ),
       });
       this.snapshots.set(m, snapshot);
       this.cursor = {
