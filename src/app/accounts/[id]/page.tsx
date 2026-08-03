@@ -115,6 +115,7 @@ export default async function AccountPage({
                 groups={groups}
                 accountsById={accountsById}
                 payeeSuggestions={payeeSuggestions}
+                transferTargets={transferTargets}
                 iconUrl={payeeIcons[row.payee]}
               />
             ))}
