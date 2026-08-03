@@ -80,6 +80,8 @@ export interface RtaAdjustment {
 
 export const SETTING_RTA_ADJUSTMENT = "rta_adjustment";
 export const SETTING_RTA_ADJUSTMENT_MONTH = "rta_adjustment_month";
+/** YYYY-MM from which category goals are evaluated — null means every month. See `setGoalsStartMonth`. */
+export const SETTING_GOALS_START_MONTH = "goals_start_month";
 const MONTH_RE = /^\d{4}-\d{2}$/;
 
 export interface BudgetData {
@@ -96,6 +98,8 @@ export interface BudgetData {
   earliestMonth: string | null;
   currency: string;
   rtaAdjustment: RtaAdjustment | null;
+  /** YYYY-MM from which category goals apply; null = no cutoff (every month). */
+  goalsStartMonth: string | null;
 }
 
 /** Read the whole budget into memory (one pass per cache lifetime). */
@@ -209,6 +213,7 @@ export function loadBudgetData(dbi: DB): BudgetData {
       getSetting(SETTING_RTA_ADJUSTMENT),
       getSetting(SETTING_RTA_ADJUSTMENT_MONTH)
     ),
+    goalsStartMonth: parseGoalsStartMonth(getSetting(SETTING_GOALS_START_MONTH)),
   };
 }
 
@@ -227,6 +232,12 @@ export function parseRtaAdjustment(
   return { amount: Math.round(amount), month };
 }
 
+/** Parse the persisted goals-start-month setting, tolerating missing/malformed values (returns null). */
+export function parseGoalsStartMonth(month: string | undefined): string | null {
+  if (month == null || !MONTH_RE.test(month)) return null;
+  return month;
+}
+
 interface Cursor {
   month: string | null;
   prevAvailable: Map<number, number>;
@@ -243,11 +254,9 @@ const ZERO_SNAPSHOT: MonthSnapshot = {
  * Net assigned across every month strictly after `month` — YNAB's "Assigned in
  * the Future", subtracted from that month's Ready to Assign.
  *
- * Only meaningful from the *current* month onward: for a past month, every
- * later month's assignments are already history, and subtracting them would
- * bury an old Ready to Assign under years of subsequent budgeting rather than
- * showing what was actually on the table back then. Callers gate on that — see
- * `assignedInFutureMonthsFor`.
+ * Applies to every month, past or present: browsing back to a past month must
+ * not resurrect money that was later assigned forward, or Ready to Assign
+ * would appear to "reappear" simply because you navigated backward.
  */
 export function assignedAfterMonth(
   assignedTotalByMonth: Map<string, number>,
@@ -258,16 +267,6 @@ export function assignedAfterMonth(
     if (m > month) total += amount;
   }
   return total;
-}
-
-/** Zero for past months (preserve history), otherwise the future-assigned total. */
-export function assignedInFutureMonthsFor(
-  assignedTotalByMonth: Map<string, number>,
-  month: string,
-  thisMonth: string
-): number {
-  if (month < thisMonth) return 0;
-  return assignedAfterMonth(assignedTotalByMonth, month);
 }
 
 /**
@@ -335,11 +334,7 @@ export class SnapshotStore {
         cumulativeOnBudgetFundsThroughPrevMonth: this.cursor.cumulativeFunds,
         accounts: data.accounts,
         readyToAssignAdjustment,
-        assignedInFutureMonths: assignedInFutureMonthsFor(
-          data.assignedTotalByMonth,
-          m,
-          currentMonth()
-        ),
+        assignedInFutureMonths: assignedAfterMonth(data.assignedTotalByMonth, m),
       });
       this.snapshots.set(m, snapshot);
       this.cursor = {
@@ -473,6 +468,12 @@ function buildAvgSpendComputer(
 export function getBudgetView(month: string): BudgetView {
   const data = store.getData();
   const snapshot = store.getSnapshot(month);
+  // Ready to Assign is one budget-wide number, identical no matter which month
+  // you're browsing — YNAB never shows a stale historical reconstruction for
+  // a past month. Only categories/activity are month-specific; the walk to
+  // the current month is already memoized by SnapshotStore.
+  const readyToAssign =
+    month < currentMonth() ? store.getSnapshot(currentMonth()).readyToAssign : snapshot.readyToAssign;
 
   const end = nextMonthKey(currentMonth());
   const start = data.earliestMonth ?? currentMonth();
@@ -504,6 +505,11 @@ export function getBudgetView(month: string): BudgetView {
       .map((r) => r.categoryId)
   );
 
+  // The user only started tracking goals from `goalsStartMonth` onward —
+  // earlier months must render as plain, goal-free categories (no amber
+  // "needs funding", no met/unmet chip), without touching the stored target.
+  const goalsActive = data.goalsStartMonth == null || month >= data.goalsStartMonth;
+
   let totalUnderfunded = 0;
   const groups: GroupView[] = [...data.groups]
     .sort((a, b) => a.sort - b.sort)
@@ -518,10 +524,10 @@ export function getBudgetView(month: string): BudgetView {
               activity: 0,
               available: 0,
             };
-          const goalFunded = fundedCategoryIds.has(category.id);
+          const goalFunded = goalsActive && fundedCategoryIds.has(category.id);
           let goal: GoalStatus | null;
           let underfunded: boolean;
-          if (category.monthlyTarget == null) {
+          if (!goalsActive || category.monthlyTarget == null) {
             goal = null;
             underfunded = false;
           } else if (category.targetType === "balance") {
@@ -549,9 +555,9 @@ export function getBudgetView(month: string): BudgetView {
             assigned: cell.assigned,
             activity: cell.activity,
             available: cell.available,
-            monthlyTarget: category.monthlyTarget,
+            monthlyTarget: goalsActive ? category.monthlyTarget : null,
             targetType: category.targetType,
-            targetDate: category.targetDate,
+            targetDate: goalsActive ? category.targetDate : null,
             goal,
             underfunded,
             goalFunded,
@@ -568,7 +574,7 @@ export function getBudgetView(month: string): BudgetView {
     month,
     months,
     currency: data.currency,
-    readyToAssign: snapshot.readyToAssign,
+    readyToAssign,
     totalUnderfunded,
     groups,
     rtaAdjustment: adj && month >= adj.month ? adj : null,
@@ -638,6 +644,11 @@ export function computeAlignmentAdjustment(
 export function setRtaAdjustment(dbi: DB, amount: number, month: string): void {
   upsertSetting(dbi, SETTING_RTA_ADJUSTMENT, String(Math.round(amount)));
   upsertSetting(dbi, SETTING_RTA_ADJUSTMENT_MONTH, month);
+}
+
+/** Upsert the goals-start-month setting. Caller must `invalidateBudgetCache()`. */
+export function setGoalsStartMonth(dbi: DB, month: string): void {
+  upsertSetting(dbi, SETTING_GOALS_START_MONTH, month);
 }
 
 function upsertSetting(dbi: DB, key: string, value: string): void {
