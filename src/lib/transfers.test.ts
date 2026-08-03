@@ -3,6 +3,8 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as schema from "@/db/schema";
 import {
+  convertTransactionToTransfer,
+  convertTransferToTransaction,
   createTransaction,
   createTransfer,
   deleteTransaction,
@@ -451,5 +453,148 @@ describe("same-day, same-amount transfers between the same accounts", () => {
     expect(secondTo.cleared).toBe(1);
     expect(firstFrom.cleared).toBe(0);
     expect(firstTo.cleared).toBe(0);
+  });
+});
+
+describe("convertTransactionToTransfer", () => {
+  it("turns a plain transaction into a transfer, moving the payee to memo and clearing the category when both sides are on-budget", () => {
+    const dbi = makeDb();
+    const id = createTransaction(dbi, {
+      accountId: CHECKING,
+      date: "2025-03-01",
+      payee: "Viseca Card Services",
+      categoryId: INVESTING,
+      memo: "",
+      amount: -20000,
+      cleared: true,
+    });
+
+    convertTransactionToTransfer(dbi, id, SAVINGS);
+
+    const rows = allTransactions();
+    expect(rows).toHaveLength(2);
+    const from = rows.find((r) => r.id === id)!;
+    const to = rows.find((r) => r.id !== id)!;
+
+    expect(from.payee).toBe("Transfer");
+    expect(from.memo).toBe("Viseca Card Services");
+    expect(from.category_id).toBeNull();
+    expect(from.amount).toBe(-20000);
+    expect(from.transfer_account_id).toBe(SAVINGS);
+
+    expect(to.account_id).toBe(SAVINGS);
+    expect(to.amount).toBe(20000);
+    expect(to.payee).toBe("Transfer");
+    expect(to.memo).toBe("Viseca Card Services");
+    expect(to.category_id).toBeNull();
+    expect(to.transfer_account_id).toBe(CHECKING);
+    expect(to.transfer_pair_id).toBe(from.transfer_pair_id);
+    expect(to.transfer_pair_id).not.toBeNull();
+  });
+
+  it("keeps the category when the counterpart is a tracking account", () => {
+    const dbi = makeDb();
+    const id = createTransaction(dbi, {
+      accountId: CHECKING,
+      date: "2025-03-01",
+      payee: "Broker deposit",
+      categoryId: INVESTING,
+      memo: "",
+      amount: -50000,
+      cleared: false,
+    });
+
+    convertTransactionToTransfer(dbi, id, TRACKING);
+
+    const rows = allTransactions();
+    const from = rows.find((r) => r.id === id)!;
+    const to = rows.find((r) => r.id !== id)!;
+
+    expect(from.category_id).toBe(INVESTING);
+    expect(to.category_id).toBeNull();
+  });
+
+  it("does not move the payee to memo when a memo is already present", () => {
+    const dbi = makeDb();
+    const id = createTransaction(dbi, {
+      accountId: CHECKING,
+      date: "2025-03-01",
+      payee: "Viseca Card Services",
+      categoryId: null,
+      memo: "Existing memo",
+      amount: -1000,
+      cleared: false,
+    });
+
+    convertTransactionToTransfer(dbi, id, SAVINGS);
+
+    const rows = allTransactions();
+    expect(rows.find((r) => r.id === id)!.memo).toBe("Existing memo");
+  });
+
+  it("retargets an existing transfer's mirror leg to a new account", () => {
+    const dbi = makeDb();
+    const { fromId, toId } = createTransfer(dbi, {
+      fromAccountId: CHECKING,
+      toAccountId: SAVINGS,
+      date: "2025-03-01",
+      amount: 10000,
+      memo: "",
+      cleared: false,
+      categoryId: null,
+    });
+
+    convertTransactionToTransfer(dbi, fromId, TRACKING);
+
+    const rows = allTransactions();
+    expect(rows).toHaveLength(2);
+    const from = rows.find((r) => r.id === fromId)!;
+    const mirror = rows.find((r) => r.id === toId)!;
+
+    expect(from.transfer_account_id).toBe(TRACKING);
+    expect(mirror.account_id).toBe(TRACKING);
+    expect(mirror.transfer_account_id).toBe(CHECKING);
+    expect(mirror.amount).toBe(10000);
+  });
+
+  it("rejects a self-transfer", () => {
+    const dbi = makeDb();
+    const id = createTransaction(dbi, {
+      accountId: CHECKING,
+      date: "2025-03-01",
+      payee: "Coffee",
+      categoryId: null,
+      memo: "",
+      amount: -500,
+      cleared: false,
+    });
+
+    expect(() => convertTransactionToTransfer(dbi, id, CHECKING)).toThrow();
+  });
+});
+
+describe("convertTransferToTransaction", () => {
+  it("deletes the mirror leg and turns the row back into a plain transaction", () => {
+    const dbi = makeDb();
+    const { fromId } = createTransfer(dbi, {
+      fromAccountId: CHECKING,
+      toAccountId: SAVINGS,
+      date: "2025-03-01",
+      amount: 10000,
+      memo: "",
+      cleared: false,
+      categoryId: null,
+    });
+
+    convertTransferToTransaction(dbi, fromId, "Migros");
+
+    const rows = allTransactions();
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row.id).toBe(fromId);
+    expect(row.payee).toBe("Migros");
+    expect(row.category_id).toBeNull();
+    expect(row.transfer_account_id).toBeNull();
+    expect(row.transfer_pair_id).toBeNull();
   });
 });

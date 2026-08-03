@@ -7,9 +7,15 @@ import { PayeeAvatar } from "@/components/payee-avatar";
 import { PayeeInput } from "@/components/payee-input";
 import type { AccountType } from "@/lib/budget-math";
 import { evaluateMoneyExpression, formatMoney } from "@/lib/currency";
-import type { AccountRef, CategoryGroupOption, RegisterRow } from "@/lib/queries";
+import type { AccountRef, CategoryGroupOption, RegisterRow, TransferTarget } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { deleteTransactionAction, toggleClearedAction, updateTransactionAction } from "../actions";
+import {
+  convertToTransactionAction,
+  convertToTransferAction,
+  deleteTransactionAction,
+  toggleClearedAction,
+  updateTransactionAction,
+} from "../actions";
 import { CategorySelect } from "./category-select";
 import { REGISTER_GRID } from "./grid";
 
@@ -139,6 +145,7 @@ export function TransactionRow({
   groups,
   accountsById,
   payeeSuggestions,
+  transferTargets,
   iconUrl,
 }: {
   row: RegisterRow;
@@ -147,6 +154,7 @@ export function TransactionRow({
   groups: CategoryGroupOption[];
   accountsById: Map<number, AccountRef>;
   payeeSuggestions: string[];
+  transferTargets: TransferTarget[];
   iconUrl?: string;
 }) {
   const [pending, startTransition] = useTransition();
@@ -213,6 +221,14 @@ export function TransactionRow({
   const linkedCategoryEditable = isTransfer && accountType !== "tracking" && otherAccount?.type === "tracking";
 
   const displayPayee = isTransfer ? `Transfer: ${row.transferAccountName ?? "?"}` : row.payee;
+
+  // Editable payee text for a transfer row — lets picking another transfer
+  // target retarget it, or typing/picking a normal payee convert it back to
+  // a plain transaction.
+  const [transferPayeeText, setTransferPayeeText] = useState(displayPayee);
+  useEffect(() => {
+    if (focusedField.current !== "payee") setTransferPayeeText(displayPayee);
+  }, [displayPayee]);
 
   // Resolved client-side so a just-picked category shows correctly before
   // the server round trip lands (row.categoryName lags one commit behind).
@@ -318,6 +334,41 @@ export function TransactionRow({
     commit();
   }
 
+  /**
+   * Picking a "Transfer: <Account>" entry from the payee dropdown — on a
+   * plain row this converts it to a transfer; on an existing transfer row it
+   * retargets the mirror leg to the new account.
+   */
+  function convertToTransfer(toAccountId: number) {
+    focusedField.current = null;
+    setEditingField(null);
+    setError(null);
+    startTransition(async () => {
+      const result = await convertToTransferAction(row.id, accountId, toAccountId, row.transferAccountId);
+      if (!result.ok) setError(result.error);
+    });
+  }
+
+  /** Blur handling for a transfer row's payee field: a typed/picked normal payee converts it back to a plain transaction. */
+  function commitTransferPayee() {
+    focusedField.current = null;
+    setEditingField(null);
+    if (skipNextCommit.current) {
+      skipNextCommit.current = false;
+      return;
+    }
+    const typed = transferPayeeText.trim();
+    if (typed === "" || typed === displayPayee) {
+      setTransferPayeeText(displayPayee);
+      return;
+    }
+    setError(null);
+    startTransition(async () => {
+      const result = await convertToTransactionAction(row.id, accountId, row.transferAccountId, typed);
+      if (!result.ok) setError(result.error);
+    });
+  }
+
   const isFuture = row.date > new Date().toISOString().slice(0, 10);
 
   return (
@@ -359,16 +410,57 @@ export function TransactionRow({
         }
       />
       {isTransfer ? (
-        <div className={cn(CELL_BOX, "flex min-w-0 items-center gap-1.5")} aria-label="Payee">
-          <PayeeAvatar payee="" transfer />
-          <span className="min-w-0 truncate">{displayPayee}</span>
-        </div>
+        editingField === "payee" ? (
+          <PayeeInput
+            suggestions={payeeSuggestions}
+            autoFocus
+            value={transferPayeeText}
+            onValueChange={setTransferPayeeText}
+            transferTargets={transferTargets}
+            onTransferSelect={convertToTransfer}
+            onFocus={(e) => {
+              focusedField.current = "payee";
+              e.currentTarget.select();
+            }}
+            onBlur={commitTransferPayee}
+            onEnter={(e) => e.currentTarget.blur()}
+            onEscape={(e) => {
+              skipNextCommit.current = true;
+              setTransferPayeeText(displayPayee);
+              e.currentTarget.blur();
+            }}
+            className={cn(CELL_FIELD, "text-sm")}
+            aria-label="Payee"
+          />
+        ) : (
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label="Payee"
+            onClick={() => setEditingField("payee")}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                setEditingField("payee");
+              }
+            }}
+            className={cn(
+              CELL_BOX,
+              "flex min-w-0 cursor-default items-center gap-1.5 outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            )}
+          >
+            <PayeeAvatar payee="" transfer />
+            <span className="min-w-0 truncate">{displayPayee}</span>
+          </div>
+        )
       ) : editingField === "payee" ? (
         <PayeeInput
           suggestions={payeeSuggestions}
           autoFocus
           value={payee}
           onValueChange={setPayee}
+          transferTargets={transferTargets}
+          onTransferSelect={convertToTransfer}
           onFocus={(e) => {
             focusedField.current = "payee";
             e.currentTarget.select();
