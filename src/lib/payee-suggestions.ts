@@ -25,3 +25,29 @@ export function filterPayeeSuggestions(
   }
   return [...prefix, ...substring].slice(0, limit);
 }
+
+/**
+ * Same prefix-then-substring ranking as {@link filterPayeeSuggestions}, but
+ * matched against the "Transfer: <Account>" label a transfer target is
+ * displayed as (as well as the bare account name, so typing "checking"
+ * still finds "Transfer: Checking"). An empty query returns every target —
+ * unlike payee suggestions, this list is short and meant to be browsable.
+ */
+export function filterTransferTargets<T extends { name: string }>(
+  targets: T[],
+  query: string,
+  limit = MAX_PAYEE_SUGGESTIONS
+): T[] {
+  const q = query.trim().toLowerCase();
+  if (q === "") return targets.slice(0, limit);
+
+  const prefix: T[] = [];
+  const substring: T[] = [];
+  for (const target of targets) {
+    const label = `transfer: ${target.name}`.toLowerCase();
+    const name = target.name.toLowerCase();
+    if (label.startsWith(q) || name.startsWith(q)) prefix.push(target);
+    else if (name.includes(q)) substring.push(target);
+  }
+  return [...prefix, ...substring].slice(0, limit);
+}

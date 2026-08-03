@@ -124,6 +124,8 @@ export function AddTransactionRow({
           value={payee}
           onValueChange={setPayee}
           onEnter={() => save()}
+          transferTargets={transferTargets}
+          onTransferSelect={(toAccountId) => setSelection({ kind: "transfer", accountId: toAccountId, categoryId: null })}
           className="h-7 text-sm"
         />
         <CategoryTransferSelect
