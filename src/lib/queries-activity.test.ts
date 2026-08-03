@@ -244,3 +244,34 @@ describe("getBudgetView avgSpend", () => {
     expect(paymentView.avgSpend).toBeNull();
   });
 });
+
+describe("getBudgetView goals start month", () => {
+  it("suppresses goal/underfunded status before goalsStartMonth, applies it at/after", async () => {
+    const { db } = await import("@/db");
+    const { getBudgetView, setGoalsStartMonth, invalidateBudgetCache } = await import("./queries");
+
+    const [group] = db.insert(schema.categoryGroups).values({ name: "Spending" }).returning().all();
+    const [groceries] = db
+      .insert(schema.categories)
+      .values({ groupId: group.id, name: "Groceries", monthlyTarget: 20000 })
+      .returning()
+      .all();
+    db.insert(schema.accounts).values({ name: "Checking", type: "checking" }).run();
+
+    setGoalsStartMonth(db, "2026-07");
+    invalidateBudgetCache();
+
+    const before = getBudgetView("2026-06").groups.flatMap((g) => g.categories).find((c) => c.id === groceries.id)!;
+    expect(before.monthlyTarget).toBeNull();
+    expect(before.goal).toBeNull();
+    expect(before.underfunded).toBe(false);
+    expect(before.goalFunded).toBe(false);
+
+    for (const month of ["2026-07", "2026-08"]) {
+      const view = getBudgetView(month).groups.flatMap((g) => g.categories).find((c) => c.id === groceries.id)!;
+      expect(view.monthlyTarget).toBe(20000);
+      expect(view.goal).not.toBeNull();
+      expect(view.underfunded).toBe(true);
+    }
+  });
+});

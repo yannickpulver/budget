@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as schema from "@/db/schema";
 import {
   assignedAfterMonth,
-  assignedInFutureMonthsFor,
   categoryMatchesFilter,
   computeAlignmentAdjustment,
   countBudgetFilterMatches,
@@ -448,7 +447,7 @@ describe("budget filter chips", () => {
   });
 });
 
-describe("assigned in future months", () => {
+describe("assignedAfterMonth", () => {
   const totals = new Map([
     ["2026-06", 900_00],
     ["2026-07", 500_00],
@@ -456,29 +455,20 @@ describe("assigned in future months", () => {
     ["2026-09", 250_00],
   ]);
 
-  describe("assignedAfterMonth", () => {
-    it("sums only the months strictly after the given one", () => {
-      expect(assignedAfterMonth(totals, "2026-07")).toBe(850_00);
-      expect(assignedAfterMonth(totals, "2026-08")).toBe(250_00);
-      expect(assignedAfterMonth(totals, "2026-09")).toBe(0);
-    });
-
-    it("is zero when nothing is budgeted ahead", () => {
-      expect(assignedAfterMonth(new Map(), "2026-07")).toBe(0);
-    });
+  it("sums only the months strictly after the given one", () => {
+    expect(assignedAfterMonth(totals, "2026-07")).toBe(850_00);
+    expect(assignedAfterMonth(totals, "2026-08")).toBe(250_00);
+    expect(assignedAfterMonth(totals, "2026-09")).toBe(0);
   });
 
-  describe("assignedInFutureMonthsFor", () => {
-    it("applies from the current month onward", () => {
-      expect(assignedInFutureMonthsFor(totals, "2026-07", "2026-07")).toBe(850_00);
-      expect(assignedInFutureMonthsFor(totals, "2026-08", "2026-07")).toBe(250_00);
-    });
+  it("applies to a past month too, so RTA doesn't reappear when browsing back", () => {
+    // Viewing June must still subtract July-September; otherwise navigating
+    // back to a past month would make already-assigned money look available
+    // again.
+    expect(assignedAfterMonth(totals, "2026-06")).toBe(1350_00);
+  });
 
-    it("is zero for a past month, so historical RTA is untouched", () => {
-      // Viewing June must not subtract July-September; that would bury an old
-      // Ready to Assign under every later month's budgeting.
-      expect(assignedInFutureMonthsFor(totals, "2026-06", "2026-07")).toBe(0);
-      expect(assignedInFutureMonthsFor(totals, "2025-01", "2026-07")).toBe(0);
-    });
+  it("is zero when nothing is budgeted ahead", () => {
+    expect(assignedAfterMonth(new Map(), "2026-07")).toBe(0);
   });
 });
