@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import type { AccountType } from "@/lib/budget-math";
 import {
+  convertTransactionToTransfer,
+  convertTransferToTransaction,
   createAccount as createAccountRow,
   createTransaction as createTransactionRow,
   createTransfer as createTransferRow,
@@ -276,4 +278,39 @@ export async function toggleClearedAction(
 ): Promise<void> {
   withUndoStep("Toggle cleared", () => toggleTransactionCleared(db, id));
   refresh(accountId, otherAccountId);
+}
+
+/**
+ * Turns a plain transaction into a transfer, or retargets an existing one to
+ * a different counterpart account — picked via the payee field's
+ * "Transfer: <Account>" entries. `previousAccountId` is the transfer's
+ * current counterpart (`row.transferAccountId`) when retargeting, `null`
+ * when converting a plain row, so its cache gets invalidated too.
+ */
+export async function convertToTransferAction(
+  id: number,
+  accountId: number,
+  toAccountId: number,
+  previousAccountId: number | null
+): Promise<ActionResult> {
+  if (toAccountId === accountId) {
+    return { ok: false, error: "Choose a different account to transfer to." };
+  }
+  withUndoStep("Convert to transfer", () => convertTransactionToTransfer(db, id, toAccountId));
+  refresh(accountId, toAccountId, previousAccountId);
+  return { ok: true };
+}
+
+/** Turns a transfer leg back into a plain transaction, e.g. typing a normal payee over "Transfer: <Account>". */
+export async function convertToTransactionAction(
+  id: number,
+  accountId: number,
+  otherAccountId: number | null,
+  payee: string
+): Promise<ActionResult> {
+  const trimmed = payee.trim();
+  if (!trimmed) return { ok: false, error: "Payee is required." };
+  withUndoStep("Convert to payee", () => convertTransferToTransaction(db, id, trimmed));
+  refresh(accountId, otherAccountId);
+  return { ok: true };
 }

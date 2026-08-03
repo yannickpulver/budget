@@ -1600,6 +1600,123 @@ export function createTransfer(dbi: DB, input: CreateTransferInput): { fromId: n
   return { fromId: Number(fromResult.lastInsertRowid), toId: Number(toResult.lastInsertRowid) };
 }
 
+/** Only the on-budget leg of a transfer carries a category, when the other leg is tracking — see `createTransfer`. */
+function transferLegCategory(
+  legIsTracking: boolean,
+  otherIsTracking: boolean,
+  categoryId: number | null
+): number | null {
+  return !legIsTracking && otherIsTracking ? categoryId : null;
+}
+
+/**
+ * YNAB-style payee-driven transfers: turn a plain transaction into a transfer
+ * (or retarget an existing one). Both cases run against the row identified by
+ * `id`, so callers never need to know upfront which one applies.
+ *
+ * Plain row: stamps a fresh `transferPairId`, moves the row's payee text to
+ * its memo (only if the memo is empty — the same convention CSV import
+ * uses), sets payee to "Transfer", and inserts the mirror leg in
+ * `toAccountId`. Category is kept only when `toAccountId` is a tracking
+ * account and this account isn't (see `transferLegCategory`).
+ *
+ * Existing transfer row: the mirror leg is moved from its current account to
+ * `toAccountId` and the category rule is reapplied for the new pairing.
+ */
+export function convertTransactionToTransfer(dbi: DB, id: number, toAccountId: number): void {
+  const original = dbi.select().from(schema.transactions).where(eq(schema.transactions.id, id)).get();
+  if (!original) throw new Error("Transaction not found.");
+  if (toAccountId === original.accountId) {
+    throw new Error("Choose a different account to transfer to.");
+  }
+
+  const accountRows = dbi
+    .select({ id: schema.accounts.id, type: schema.accounts.type })
+    .from(schema.accounts)
+    .all();
+  const typeById = new Map(accountRows.map((a) => [a.id, a.type]));
+  const fromIsTracking = typeById.get(original.accountId) === "tracking";
+  const toIsTracking = typeById.get(toAccountId) === "tracking";
+
+  if (original.transferAccountId != null) {
+    const mirror = findMirrorLeg(dbi, original);
+    const carriedCategoryId = original.categoryId ?? mirror?.categoryId ?? null;
+
+    dbi
+      .update(schema.transactions)
+      .set({
+        transferAccountId: toAccountId,
+        categoryId: transferLegCategory(fromIsTracking, toIsTracking, carriedCategoryId),
+      })
+      .where(eq(schema.transactions.id, id))
+      .run();
+
+    if (mirror) {
+      dbi
+        .update(schema.transactions)
+        .set({
+          accountId: toAccountId,
+          transferAccountId: original.accountId,
+          categoryId: transferLegCategory(toIsTracking, fromIsTracking, carriedCategoryId),
+        })
+        .where(eq(schema.transactions.id, mirror.id))
+        .run();
+    }
+    return;
+  }
+
+  const transferPairId = crypto.randomUUID();
+  const memo = original.memo || original.payee;
+
+  dbi
+    .update(schema.transactions)
+    .set({
+      payee: "Transfer",
+      memo,
+      categoryId: transferLegCategory(fromIsTracking, toIsTracking, original.categoryId),
+      transferAccountId: toAccountId,
+      transferPairId,
+    })
+    .where(eq(schema.transactions.id, id))
+    .run();
+
+  dbi
+    .insert(schema.transactions)
+    .values({
+      accountId: toAccountId,
+      date: original.date,
+      payee: "Transfer",
+      categoryId: transferLegCategory(toIsTracking, fromIsTracking, original.categoryId),
+      memo,
+      amount: -original.amount,
+      cleared: original.cleared,
+      transferAccountId: original.accountId,
+      transferPairId,
+    })
+    .run();
+}
+
+/**
+ * The reverse of `convertTransactionToTransfer`: deletes the mirror leg and
+ * turns this row back into a plain transaction with the given payee.
+ * Category is left `null` — the user picks a fresh one, same as any new
+ * transaction.
+ */
+export function convertTransferToTransaction(dbi: DB, id: number, payee: string): void {
+  const original = dbi.select().from(schema.transactions).where(eq(schema.transactions.id, id)).get();
+  if (!original) throw new Error("Transaction not found.");
+  if (original.transferAccountId == null) throw new Error("Not a transfer.");
+
+  const mirror = findMirrorLeg(dbi, original);
+  if (mirror) dbi.delete(schema.transactions).where(eq(schema.transactions.id, mirror.id)).run();
+
+  dbi
+    .update(schema.transactions)
+    .set({ payee, categoryId: null, transferAccountId: null, transferPairId: null })
+    .where(eq(schema.transactions.id, id))
+    .run();
+}
+
 /**
  * Ongoing per-account CSV import: preview + commit.
  *
