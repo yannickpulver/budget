@@ -3,7 +3,7 @@ services:
     build: .
     # Or, once published: image: ghcr.io/<you>/budget:latest
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       # Persists the SQLite database (and its -wal/-shm files) on the host.
       - ./data:/data
