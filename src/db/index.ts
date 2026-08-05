@@ -4,16 +4,15 @@ import Database from "better-sqlite3";
 import path from "node:path";
 import fs from "node:fs";
 import * as schema from "./schema";
+import { dbPath } from "./paths";
 
 // Configurable so the Docker image (and tests) can point at a different
 // SQLite file without code changes. Defaults to the local dev location.
-const dbPath = process.env.DATABASE_PATH
-  ? path.resolve(process.env.DATABASE_PATH)
-  : path.join(process.cwd(), "data", "budget.db");
+const resolvedDbPath = dbPath();
 
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+fs.mkdirSync(path.dirname(resolvedDbPath), { recursive: true });
 
-const sqlite = new Database(dbPath);
+const sqlite = new Database(resolvedDbPath);
 sqlite.pragma("journal_mode = WAL");
 sqlite.pragma("foreign_keys = ON");
 
