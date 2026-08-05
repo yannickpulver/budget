@@ -43,3 +43,6 @@ next-env.d.ts
 # budget: local data & private fixtures
 /data/
 /plan/
+
+# Server-specific deployment notes
+DEPLOY.md
