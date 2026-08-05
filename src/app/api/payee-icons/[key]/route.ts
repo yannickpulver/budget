@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { dataDir } from "@/db/paths";
 
 /**
  * Serves a downloaded payee favicon by its key (see lib/payee-icons.ts). The
@@ -16,7 +17,7 @@ export async function GET(
     return new Response("Not found", { status: 404 });
   }
 
-  const dir = path.join(process.cwd(), "data", "payee-icons");
+  const dir = path.join(dataDir(), "payee-icons");
   for (const ext of ["png", "ico"] as const) {
     const file = path.join(dir, `${key}.${ext}`);
     if (fs.existsSync(file)) {

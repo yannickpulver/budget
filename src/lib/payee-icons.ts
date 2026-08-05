@@ -19,6 +19,7 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { db } from "@/db";
+import { dataDir } from "@/db/paths";
 import * as schema from "@/db/schema";
 import { getPayeeSuggestions } from "./queries";
 
@@ -37,9 +38,12 @@ const SERVICES: ((domain: string) => string)[] = [
   (domain) => `https://www.google.com/s2/favicons?domain=${domain}&sz=64`,
 ];
 
-/** Directory the downloaded icon bytes live in (created on first write). */
+/**
+ * Directory the downloaded icon bytes live in (created on first write). Sits
+ * next to the database so it lands on the persistent volume in Docker.
+ */
 function iconDir(): string {
-  return path.join(process.cwd(), "data", "payee-icons");
+  return path.join(dataDir(), "payee-icons");
 }
 
 /** Stable 16-hex-char key derived from a payee — the on-disk/URL identifier. */
@@ -183,11 +187,19 @@ export interface PayeeIconRefreshResult {
   skipped: number;
 }
 
+/** Whether an "ok" row's bytes are actually still on disk. */
+function hasIconFile(payee: string): boolean {
+  const key = payeeKey(payee);
+  return ["png", "ico"].some((ext) => fs.existsSync(path.join(iconDir(), `${key}.${ext}`)));
+}
+
 /**
  * Fetch icons for every distinct payee, skipping ones already resolved.
- * Existing "ok" rows are always skipped; "none" rows are skipped too unless
- * `retryMisses` is set and the miss is older than 30 days. Fetches run
- * sequentially with a small delay to stay polite to the favicon services.
+ * Existing "ok" rows are skipped unless their file is gone (an older build
+ * wrote icons outside the persistent volume, so the row can outlive the bytes);
+ * "none" rows are skipped too unless `retryMisses` is set and the miss is older
+ * than 30 days. Fetches run sequentially with a small delay to stay polite to
+ * the favicon services.
  */
 export async function refreshPayeeIcons(
   dbi: DB,
@@ -204,7 +216,7 @@ export async function refreshPayeeIcons(
 
   for (const payee of payees) {
     const row = existing.get(payee);
-    if (row?.status === "ok") {
+    if (row?.status === "ok" && hasIconFile(payee)) {
       skipped++;
       continue;
     }
