@@ -11,6 +11,7 @@ import {
   computeAlignmentAdjustment,
   countBudgetFilterMatches,
   filterGroupViews,
+  getCategoryStats,
   getSidebarData,
   listAccounts,
   loadBudgetData,
@@ -87,6 +88,7 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 const GROCERIES = 1;
 const RENT = 2;
+const SAVING = 3;
 
 function seed() {
   sqlite.exec(DDL);
@@ -95,7 +97,8 @@ function seed() {
     INSERT INTO category_groups (id, name, sort, hidden) VALUES (10, 'Spending', 0, 0);
     INSERT INTO categories (id, group_id, name, sort) VALUES
       (${GROCERIES}, 10, 'Groceries', 0),
-      (${RENT}, 10, 'Rent', 1);
+      (${RENT}, 10, 'Rent', 1),
+      (${SAVING}, 10, 'Swissquote', 2);
     -- Jan: income + assignments + spending.
     INSERT INTO transactions (account_id, date, category_id, amount) VALUES
       (1, '2025-01-05', NULL, 500000),
@@ -470,5 +473,81 @@ describe("assignedAfterMonth", () => {
 
   it("is zero when nothing is budgeted ahead", () => {
     expect(assignedAfterMonth(new Map(), "2026-07")).toBe(0);
+  });
+});
+
+describe("getCategoryStats", () => {
+  // Fixture activity for GROCERIES: -8000 in 2025-01, -5000 in 2025-02.
+  // `monthsElapsed` drives the per-month average, so these tests pin its
+  // three cases: a past year spans its own 12 months (not through today), the
+  // current year stops at the current month, and a month period is always 1.
+
+  it("averages a past year over that year's own 12 months, not through today", () => {
+    const now = new Date("2026-06-15T00:00:00Z");
+    const stats = getCategoryStats(GROCERIES, "2025", makeDb(), now);
+
+    expect(stats.totalOutflow).toBe(13000);
+    expect(stats.monthsElapsed).toBe(12);
+    expect(stats.avgOutflowPerMonth).toBe(Math.round(13000 / 12));
+  });
+
+  it("stops the current year's average at the current month", () => {
+    const now = new Date("2025-06-15T00:00:00Z");
+    const stats = getCategoryStats(GROCERIES, "2025", makeDb(), now);
+
+    // Jan through June inclusive = 6 months, even though activity stops in Feb.
+    expect(stats.monthsElapsed).toBe(6);
+    expect(stats.avgOutflowPerMonth).toBe(Math.round(13000 / 6));
+  });
+
+  it("treats a month period as 1 elapsed month", () => {
+    const now = new Date("2026-06-15T00:00:00Z");
+    const stats = getCategoryStats(GROCERIES, "2025-01", makeDb(), now);
+
+    expect(stats.monthsElapsed).toBe(1);
+    expect(stats.totalOutflow).toBe(8000);
+    expect(stats.avgOutflowPerMonth).toBe(8000);
+  });
+
+  it("spans all-time from the category's first active month through the current month", () => {
+    const now = new Date("2025-06-15T00:00:00Z");
+    const stats = getCategoryStats(GROCERIES, "all", makeDb(), now);
+
+    // First active month is 2025-01; capped at the current month, 2025-06.
+    expect(stats.monthsElapsed).toBe(6);
+    expect(stats.totalOutflow).toBe(13000);
+    expect(stats.avgOutflowPerMonth).toBe(Math.round(13000 / 6));
+  });
+
+  // Fix 1: the Categories tab's all-categories aggregate must reconcile with
+  // Overview's spending total, which excludes transfers entirely -- including
+  // a categorized transfer leg like "Transfer to Swissquote" filed under a
+  // Saving/Investing category. A single-category drill-down, however, is a
+  // ledger view of that one category and must keep showing the leg.
+  it("excludes a categorized transfer leg from the all-categories aggregate", () => {
+    sqlite.exec(`
+      INSERT INTO accounts (id, name, type) VALUES (99, 'Swissquote', 'tracking');
+      -- A categorized transfer leg to a tracking account (e.g. "Transfer to
+      -- Swissquote" filed under Saving/Investing) -- moving money, not spending.
+      INSERT INTO transactions (account_id, date, category_id, amount, transfer_account_id) VALUES
+        (1, '2025-02-15', ${SAVING}, -30000, 99);
+    `);
+    const now = new Date("2025-06-15T00:00:00Z");
+    const stats = getCategoryStats(null, "2025-02", makeDb(), now);
+
+    // Groceries 5000 only; the -30000 transfer leg (categorized SAVING) is excluded.
+    expect(stats.totalOutflow).toBe(5000);
+  });
+
+  it("includes that same transfer leg when drilling into its specific category", () => {
+    sqlite.exec(`
+      INSERT INTO accounts (id, name, type) VALUES (99, 'Swissquote', 'tracking');
+      INSERT INTO transactions (account_id, date, category_id, amount, transfer_account_id) VALUES
+        (1, '2025-02-15', ${SAVING}, -30000, 99);
+    `);
+    const now = new Date("2025-06-15T00:00:00Z");
+    const stats = getCategoryStats(SAVING, "2025-02", makeDb(), now);
+
+    expect(stats.totalOutflow).toBe(30000);
   });
 });

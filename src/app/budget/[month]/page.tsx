@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ChevronDown, ChevronLeft, ChevronRight, Info, Tags, Wallet } from "lucide-react";
+import { ChevronDown, Info, Tags, Wallet } from "lucide-react";
 import { db } from "@/db";
+import { PeriodNav } from "@/components/period-nav";
 import { prevMonthKey, nextMonthKey } from "@/lib/budget-math";
 import { formatCurrency, formatMoney, formatMoneyWhole } from "@/lib/currency";
 import {
@@ -285,23 +286,16 @@ function Header({
 
   return (
     <header className="flex items-center justify-between gap-6 border-b border-border px-4 py-3">
-      <div className="flex items-center gap-1">
-        <NavArrow href={hasPrev ? monthHref(prevMonthKey(month), activeFilters) : null} label="Previous month">
-          <ChevronLeft className="size-4" />
-        </NavArrow>
-        <div className="min-w-48 text-center text-xl font-semibold">{monthLabel(month)}</div>
-        <NavArrow href={hasNext ? monthHref(nextMonthKey(month), activeFilters) : null} label="Next month">
-          <ChevronRight className="size-4" />
-        </NavArrow>
-        {month !== today && (
-          <Link
-            href={monthHref(today, activeFilters)}
-            className="ml-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            Today
-          </Link>
-        )}
-      </div>
+      <PeriodNav
+        label={monthLabel(month)}
+        prevHref={hasPrev ? monthHref(prevMonthKey(month), activeFilters) : null}
+        nextHref={hasNext ? monthHref(nextMonthKey(month), activeFilters) : null}
+        jumpHref={month !== today ? monthHref(today, activeFilters) : null}
+        jumpLabel="Today"
+        prevAriaLabel="Previous month"
+        nextAriaLabel="Next month"
+        labelClassName="min-w-48 text-center text-xl font-semibold"
+      />
 
       <div className="text-right">
         <div className={cn("text-2xl font-semibold tabular-nums", rtaClass)} title={adjustmentHint}>
@@ -322,33 +316,6 @@ function Header({
         )}
       </div>
     </header>
-  );
-}
-
-function NavArrow({
-  href,
-  label,
-  children,
-}: {
-  href: string | null;
-  label: string;
-  children: React.ReactNode;
-}) {
-  if (!href) {
-    return (
-      <span className="flex size-7 items-center justify-center rounded-md text-muted-foreground/40">
-        {children}
-      </span>
-    );
-  }
-  return (
-    <Link
-      href={href}
-      aria-label={label}
-      className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-    >
-      {children}
-    </Link>
   );
 }
 
