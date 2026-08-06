@@ -1,200 +1,315 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { BarChart3 } from "lucide-react";
+import { redirect } from "next/navigation";
 import { db } from "@/db";
-import { formatCurrency, formatMoney } from "@/lib/currency";
+import { BarList } from "@/components/charts/bar-list";
+import { GroupedBarChart } from "@/components/charts/grouped-bar-chart";
+import { LineChart } from "@/components/charts/line-chart";
+import { CHART_COLORS } from "@/components/charts/theme";
+import { PeriodNav } from "@/components/period-nav";
+import { formatCurrency, formatCurrencyWhole } from "@/lib/currency";
 import {
-  getCategoryStats,
-  listCategoryGroupsAdmin,
-  STATS_PERIODS,
-  type CategoryStats,
+  monthAxisLabel,
+  monthShortLabel,
+  parseStatsPeriod,
+  periodMode,
+  statsPeriodLabel,
   type StatsPeriod,
-} from "@/lib/queries";
+} from "@/lib/stats-period";
+import {
+  getMonthlyCashflow,
+  getNetWorthHistory,
+  getSpendingByGroup,
+  getTopPayees,
+  type NetWorthPoint,
+} from "@/lib/stats-queries";
 import { cn } from "@/lib/utils";
-import { CategoryPicker } from "./category-picker";
+import { StatsTabs } from "./tabs";
+import { buildPeriodNav, EmptyNote, SectionHeading, StatsHeader, Tile } from "./ui";
 
 export const metadata: Metadata = { title: "Stats · budget" };
 
-const PERIOD_LABELS: Record<StatsPeriod, string> = {
-  month: "This month",
-  year: "This year",
-  all: "All time",
-};
+const TOP_PAYEE_LIMIT = 10;
 
-function isStatsPeriod(value: string | undefined): value is StatsPeriod {
-  return value != null && (STATS_PERIODS as readonly string[]).includes(value);
+function overviewHref(period: StatsPeriod): string {
+  return `/stats?period=${period}`;
 }
 
-function statsHref(cat: string, period: StatsPeriod): string {
-  return `/stats?cat=${cat}&period=${period}`;
-}
-
-export default async function StatsPage({
+export default async function StatsOverviewPage({
   searchParams,
 }: {
-  searchParams: Promise<{ cat?: string; period?: string }>;
+  searchParams: Promise<{ period?: string; cat?: string }>;
 }) {
-  const { cat, period: periodParam } = await searchParams;
-  const period: StatsPeriod = isStatsPeriod(periodParam) ? periodParam : "month";
+  const { period: periodParam, cat } = await searchParams;
+  // One clock for the whole request so every section agrees on "today".
+  const now = new Date();
+  const period = parseStatsPeriod(periodParam, now);
 
-  const groups = listCategoryGroupsAdmin(db).filter((g) => g.categories.length > 0);
-  const allCategories = groups.flatMap((g) => g.categories);
+  // Old /stats?cat=<id> links used to show the category drill-down; that now
+  // lives at /stats/categories.
+  if (cat != null) {
+    redirect(`/stats/categories?${new URLSearchParams({ cat, period }).toString()}`);
+  }
 
-  if (allCategories.length === 0) {
+  const netWorth = getNetWorthHistory(db, now);
+  const cashflow = getMonthlyCashflow(period, db, now);
+  const spending = getSpendingByGroup(period, db);
+  const payees = getTopPayees(period, TOP_PAYEE_LIMIT, db);
+
+  const nav = buildPeriodNav(period, now, overviewHref);
+
+  if (netWorth.points.length === 0) {
     return (
       <div className="flex flex-1 flex-col">
-        <Header />
-        <div className="px-4 py-3">
-          <EmptyState />
+        <StatsHeader icon={<BarChart3 className="size-5 text-muted-foreground" />} title="Stats" />
+        <StatsTabs active="overview" period={period} />
+        <div className="px-4 py-4">
+          <EmptyStatePanel />
         </div>
       </div>
     );
   }
-
-  // Resolve the selection. Default (no/`all`/unknown `cat`) aggregates across
-  // all categories; a numeric `cat` that matches a real category selects it.
-  const requested = cat != null && cat !== "all" ? Number(cat) : NaN;
-  const known = new Set(allCategories.map((c) => c.id));
-  const selectedId =
-    Number.isInteger(requested) && known.has(requested) ? requested : null;
-  const selectedValue = selectedId == null ? "all" : String(selectedId);
-  const selected = selectedId == null ? null : allCategories.find((c) => c.id === selectedId)!;
-
-  const stats = getCategoryStats(selectedId, period, db);
 
   return (
     <div className="flex flex-1 flex-col">
-      <Header />
+      <StatsHeader icon={<BarChart3 className="size-5 text-muted-foreground" />} title="Stats" />
+      <StatsTabs active="overview" period={period} />
 
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-        <CategoryPicker groups={groups} selected={selectedValue} period={period} />
-        <div className="flex items-center gap-1.5">
-          {STATS_PERIODS.map((key) => (
-            <Link
-              key={key}
-              href={statsHref(selectedValue, key)}
-              className={cn(
-                "inline-flex h-6 items-center rounded-full border px-2.5 text-xs font-medium transition-colors",
-                key === period
-                  ? "border-transparent bg-foreground text-background hover:bg-foreground/90"
-                  : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
-            >
-              {PERIOD_LABELS[key]}
-            </Link>
-          ))}
-        </div>
+        <PeriodNav {...nav} />
       </div>
 
-      <div className="px-4 py-4">
-        <div className="mb-1 flex items-baseline gap-2">
-          <h2 className="text-lg font-semibold">
-            {selected == null ? "All categories" : selected.name}
-            {selected?.hidden && (
-              <span className="ml-1.5 text-xs font-normal text-muted-foreground">(hidden)</span>
-            )}
-          </h2>
-          <span className="text-xs text-muted-foreground">{PERIOD_LABELS[period].toLowerCase()}</span>
-        </div>
+      <div className="flex flex-col gap-6 px-4 py-4">
+        <NetWorthSection
+          points={netWorth.points}
+          currency={netWorth.currency}
+          liveValuation={netWorth.liveValuation}
+          period={period}
+        />
 
-        <SummaryTiles stats={stats} />
+        <CashflowSection cashflow={cashflow} period={period} />
 
-        <Breakdown stats={stats} />
-      </div>
-    </div>
-  );
-}
-
-function Header() {
-  return (
-    <header className="flex items-center gap-2 border-b border-border px-4 py-3">
-      <BarChart3 className="size-5 text-muted-foreground" />
-      <h1 className="text-xl font-semibold">Stats</h1>
-    </header>
-  );
-}
-
-function SummaryTiles({ stats }: { stats: CategoryStats }) {
-  const { currency } = stats;
-  const tiles: { label: string; value: string; hint?: string }[] = [
-    { label: "Spent", value: formatCurrency(stats.totalOutflow, currency) },
-    {
-      label: "Transactions",
-      value: String(stats.count),
-      hint: stats.totalInflow > 0 ? `+${formatCurrency(stats.totalInflow, currency)} in` : undefined,
-    },
-  ];
-  if (stats.period !== "month") {
-    tiles.push({
-      label: "Avg / month",
-      value: formatCurrency(stats.avgOutflowPerMonth, currency),
-      hint: stats.monthsElapsed > 0 ? `over ${stats.monthsElapsed} mo` : undefined,
-    });
-  }
-  if (stats.totalInflow > 0) {
-    tiles.push({ label: "Net spent", value: formatCurrency(stats.net, currency) });
-  }
-
-  return (
-    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-      {tiles.map((tile) => (
-        <div key={tile.label} className="rounded-lg border border-border p-3">
-          <div className="text-xs font-medium text-muted-foreground uppercase">{tile.label}</div>
-          <div className="mt-1 text-lg font-semibold tabular-nums">{tile.value}</div>
-          {tile.hint && <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">{tile.hint}</div>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Breakdown({ stats }: { stats: CategoryStats }) {
-  if (stats.count === 0) {
-    return (
-      <p className="mt-6 rounded-lg border border-dashed border-border px-2 py-8 text-center text-sm text-muted-foreground">
-        No transactions for {PERIOD_LABELS[stats.period].toLowerCase()}.
-      </p>
-    );
-  }
-
-  const max = Math.max(1, ...stats.buckets.map((b) => b.outflow));
-  const heading =
-    stats.bucketKind === "month"
-      ? "By month"
-      : stats.bucketKind === "category"
-        ? "By category"
-        : "By payee";
-
-  return (
-    <div className="mt-5">
-      <h3 className="mb-2 text-xs font-medium text-muted-foreground uppercase">{heading}</h3>
-      <div className="flex flex-col gap-2">
-        {stats.buckets.map((bucket) => (
-          <div key={bucket.key}>
-            <div className="flex items-baseline justify-between gap-2 text-sm">
-              <span className="min-w-0 truncate">{bucket.label}</span>
-              <span className="shrink-0 tabular-nums">{formatMoney(bucket.outflow)}</span>
-            </div>
-            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
-              <div
-                className="h-full rounded-full bg-foreground/70"
-                style={{ width: `${Math.max(2, (bucket.outflow / max) * 100)}%` }}
+        <div className="grid gap-6 lg:grid-cols-2">
+          <section>
+            <SectionHeading>Spending by group</SectionHeading>
+            {spending.groups.length === 0 ? (
+              <EmptyNote>No spending in {statsPeriodLabel(period).toLowerCase()}.</EmptyNote>
+            ) : (
+              <BarList
+                items={spending.groups.map((group) => ({
+                  key: String(group.groupId),
+                  label: group.name,
+                  value: group.outflow,
+                  hint: `${formatShare(group.share)} · ${group.count}×`,
+                }))}
+                formatValue={(value) => formatCurrency(value, spending.currency)}
+                colorClassName="bg-red-600/70"
               />
-            </div>
-          </div>
-        ))}
+            )}
+          </section>
+
+          <section>
+            <SectionHeading>Top payees</SectionHeading>
+            {payees.length === 0 ? (
+              <EmptyNote>No payees with spending in {statsPeriodLabel(period).toLowerCase()}.</EmptyNote>
+            ) : (
+              <BarList
+                items={payees.map((payee, index) => ({
+                  key: `${index}-${payee.payee}`,
+                  label: payee.payee,
+                  value: payee.outflow,
+                  hint: `${payee.count}×`,
+                }))}
+                formatValue={(value) => formatCurrency(value, cashflow.currency)}
+              />
+            )}
+          </section>
+        </div>
       </div>
     </div>
   );
 }
 
-function EmptyState() {
+/** 0.184 -> "18%". */
+function formatShare(share: number): string {
+  return `${Math.round(share * 100)}%`;
+}
+
+/** 0.184 -> "18%", null -> "—". */
+function formatRate(rate: number | null): string {
+  return rate == null ? "—" : `${Math.round(rate * 100)}%`;
+}
+
+function signClass(value: number): string {
+  return value > 0 ? "text-emerald-600" : value < 0 ? "text-red-600" : "";
+}
+
+/**
+ * Net-worth movement across the selected period: the last point inside the
+ * period against the point just before it (0 when the period opens the
+ * history — net worth genuinely started at nothing). Falls back to the last 12
+ * points when the period holds no data at all, so the hero always says
+ * something true.
+ */
+function netWorthChange(
+  points: NetWorthPoint[],
+  period: StatsPeriod
+): { delta: number; caption: string } | null {
+  if (points.length < 2) return null;
+  const mode = periodMode(period);
+
+  if (mode === "all") {
+    return {
+      delta: points[points.length - 1].balance - points[0].balance,
+      caption: `since ${monthShortLabel(points[0].month)}`,
+    };
+  }
+
+  const matches = (month: string) => (mode === "month" ? month === period : month.slice(0, 4) === period);
+  const firstIndex = points.findIndex((p) => matches(p.month));
+
+  if (firstIndex === -1) {
+    const baseIndex = Math.max(0, points.length - 13);
+    const months = points.length - 1 - baseIndex;
+    return {
+      delta: points[points.length - 1].balance - points[baseIndex].balance,
+      caption: months === 1 ? "over the last month" : `over the last ${months} months`,
+    };
+  }
+
+  let lastIndex = firstIndex;
+  while (lastIndex + 1 < points.length && matches(points[lastIndex + 1].month)) lastIndex++;
+  const baseline = firstIndex > 0 ? points[firstIndex - 1].balance : 0;
+
+  return {
+    delta: points[lastIndex].balance - baseline,
+    caption: `over ${statsPeriodLabel(period)}`,
+  };
+}
+
+function NetWorthSection({
+  points,
+  currency,
+  liveValuation,
+  period,
+}: {
+  points: NetWorthPoint[];
+  currency: string;
+  liveValuation: boolean;
+  period: StatsPeriod;
+}) {
+  const current = points[points.length - 1].balance;
+  const change = netWorthChange(points, period);
+
+  return (
+    <section>
+      <SectionHeading>Net worth</SectionHeading>
+      <div className="rounded-lg border border-border p-3">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="text-3xl font-semibold tabular-nums">{formatCurrency(current, currency)}</span>
+          {change != null && (
+            <span className={cn("text-sm font-medium tabular-nums", signClass(change.delta))}>
+              {change.delta >= 0 ? "+" : "−"}
+              {formatCurrency(Math.abs(change.delta), currency)}
+              <span className="ml-1 font-normal text-muted-foreground">{change.caption}</span>
+            </span>
+          )}
+        </div>
+
+        <LineChart
+          className="mt-3"
+          points={points.map((point) => ({
+            key: point.month,
+            label: monthAxisLabel(point.month),
+            value: point.balance,
+          }))}
+          title="Net worth over time"
+          formatValue={(value) => formatCurrencyWhole(value, currency)}
+          height={200}
+        />
+
+        <p className="mt-2 text-xs text-muted-foreground">
+          Always the full history, not the selected period.
+          {liveValuation && " Investments are marked to their latest cached price."}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function CashflowSection({
+  cashflow,
+  period,
+}: {
+  cashflow: ReturnType<typeof getMonthlyCashflow>;
+  period: StatsPeriod;
+}) {
+  const { currency } = cashflow;
+  const hasActivity = cashflow.entries.some((entry) => entry.income > 0 || entry.spending > 0);
+
+  return (
+    <section>
+      <SectionHeading>Income vs spending</SectionHeading>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+        <Tile label="Income" value={formatCurrency(cashflow.income, currency)} />
+        <Tile label="Spending" value={formatCurrency(cashflow.spending, currency)} />
+        <Tile
+          label="Net"
+          value={formatCurrency(cashflow.net, currency)}
+          valueClassName={signClass(cashflow.net)}
+        />
+        <Tile
+          label="Savings rate"
+          value={formatRate(cashflow.savingsRate)}
+          hint={cashflow.savingsRate == null ? "no income" : undefined}
+          valueClassName={cashflow.savingsRate == null ? "" : signClass(cashflow.savingsRate)}
+        />
+        <Tile
+          label="Avg spending / mo"
+          value={formatCurrency(cashflow.avgSpendingPerMonth, currency)}
+          hint={statsPeriodLabel(period)}
+        />
+      </div>
+
+      {hasActivity ? (
+        <GroupedBarChart
+          className="mt-3"
+          bars={cashflow.entries.map((entry) => ({
+            key: entry.key,
+            label: entry.label,
+            values: [entry.income, entry.spending],
+            muted: !entry.inPeriod,
+          }))}
+          series={[
+            { name: "Income", color: CHART_COLORS.income },
+            { name: "Spending", color: CHART_COLORS.spending },
+          ]}
+          title={cashflow.bucket === "year" ? "Income vs spending per year" : "Income vs spending per month"}
+          formatValue={(value) => formatCurrencyWhole(value, currency)}
+          height={220}
+        />
+      ) : (
+        <EmptyNote className="mt-3">No income or spending in {statsPeriodLabel(period).toLowerCase()}.</EmptyNote>
+      )}
+
+      {cashflow.entries.some((entry) => !entry.inPeriod) && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Faded months are context around {statsPeriodLabel(period)}.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function EmptyStatePanel() {
   return (
     <div className="mx-auto max-w-md rounded-lg border border-dashed border-border p-8 text-center">
       <BarChart3 className="mx-auto size-6 text-muted-foreground" />
       <h2 className="mt-3 text-sm font-semibold">Nothing to show yet</h2>
       <p className="mt-1.5 text-sm text-muted-foreground">
-        Add some categories and transactions, then come back to see how much you spend in each.
+        Import or add some transactions, then come back to see your net worth, cashflow and where the
+        money goes.
       </p>
     </div>
   );

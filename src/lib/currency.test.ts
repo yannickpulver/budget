@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { evaluateMoneyExpression, parseMoneyInput } from "./currency";
+import { evaluateMoneyExpression, formatCurrencyWhole, parseMoneyInput } from "./currency";
+
+describe("formatCurrencyWhole", () => {
+  it("formats a positive amount without a sign", () => {
+    expect(formatCurrencyWhole(123450, "CHF")).toBe("CHF 1'235");
+  });
+
+  it("leads the whole string with a minus for a negative amount", () => {
+    expect(formatCurrencyWhole(-123450, "CHF")).toBe("-CHF 1'235");
+  });
+
+  it("formats zero without a sign", () => {
+    expect(formatCurrencyWhole(0, "CHF")).toBe("CHF 0");
+  });
+
+  it("does not sign a negative amount that rounds to zero", () => {
+    expect(formatCurrencyWhole(-30, "CHF")).toBe("CHF 0");
+  });
+});
 
 describe("evaluateMoneyExpression", () => {
   it("matches parseMoneyInput for plain numbers", () => {

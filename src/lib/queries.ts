@@ -37,6 +37,7 @@ import {
 import { formatMoney } from "./currency";
 import { fetchYahooQuote, fxSymbol, isStale, toBudgetMinorUnits } from "./prices";
 import { computeSwissquoteImportHash, type ParsedStatement, type StatementEntry } from "./swissquote-import";
+import { monthKeyOf, monthShortLabel, monthSpan, periodMode, statsPeriodBounds, type StatsPeriod } from "./stats-period";
 import { db, sqlite } from "@/db";
 import * as schema from "@/db/schema";
 
@@ -1343,7 +1344,7 @@ export function createAccount(dbi: DB, input: CreateAccountInput): number {
       .values({
         accountId,
         date: input.date,
-        payee: "Starting Balance",
+        payee: STARTING_BALANCE_PAYEE,
         categoryId: null,
         memo: "",
         amount: input.startingBalance,
@@ -2184,7 +2185,7 @@ export function syncHoldingsBalance(dbi: DB, accountId: number): SyncBalanceResu
   createTransaction(dbi, {
     accountId,
     date: new Date().toISOString().slice(0, 10),
-    payee: "Balance Adjustment",
+    payee: BALANCE_ADJUSTMENT_PAYEE,
     categoryId: null,
     memo: "Synced to holdings value",
     amount: delta,
@@ -2213,7 +2214,7 @@ export function setAccountBalance(dbi: DB, accountId: number, targetRappen: numb
   createTransaction(dbi, {
     accountId,
     date: new Date().toISOString().slice(0, 10),
-    payee: "Balance Adjustment",
+    payee: BALANCE_ADJUSTMENT_PAYEE,
     categoryId: null,
     memo: "Manual balance update",
     amount: delta,
@@ -2503,8 +2504,16 @@ export function commitSwissquoteImport(dbi: DB, accountId: number, rows: Swissqu
  * both reported as positive minor units; `net` is outflow − inflow (net spend).
  */
 
-export const STATS_PERIODS = ["month", "year", "all"] as const;
-export type StatsPeriod = (typeof STATS_PERIODS)[number];
+export type { StatsPeriod };
+
+/**
+ * Synthetic, app-generated payees booked as uncategorized (categoryId null)
+ * bookkeeping transactions: account seeding and holdings/balance
+ * reconciliation, not real income. Stats must exclude them when treating
+ * null-category inflows as income.
+ */
+export const STARTING_BALANCE_PAYEE = "Starting Balance";
+export const BALANCE_ADJUSTMENT_PAYEE = "Balance Adjustment";
 
 export interface StatsBucket {
   /** "YYYY-MM" for month buckets, or the payee string for this-month buckets. */
@@ -2535,34 +2544,21 @@ export interface CategoryStats {
   currency: string;
 }
 
-/** [start, end) YYYY-MM-DD bounds for a period, or nulls for all-time. */
-function statsPeriodBounds(
-  period: StatsPeriod,
-  now: Date
-): { start: string | null; end: string | null } {
-  const y = now.getFullYear();
-  const m = now.getMonth(); // 0-based
-  if (period === "all") return { start: null, end: null };
-  if (period === "year") return { start: `${y}-01-01`, end: `${y + 1}-01-01` };
-  const startMonth = String(m + 1).padStart(2, "0");
-  const nextYear = m === 11 ? y + 1 : y;
-  const nextMonth = String(m === 11 ? 1 : m + 2).padStart(2, "0");
-  return { start: `${y}-${startMonth}-01`, end: `${nextYear}-${nextMonth}-01` };
-}
-
-/** Number of calendar months in [from, to] inclusive (YYYY-MM keys). */
-function monthSpan(from: string, to: string): number {
-  const [fy, fm] = from.split("-").map(Number);
-  const [ty, tm] = to.split("-").map(Number);
-  return (ty - fy) * 12 + (tm - fm) + 1;
-}
-
 /**
  * `categoryId = null` aggregates across ALL categories. In that mode
  * transactions with a null `category_id` are excluded — those are transfers
  * (and any uncategorized rows), which aren't spending — so the all-categories
  * total equals the sum of the per-category totals and stays consistent with
  * the single-category view.
+ *
+ * All-categories mode ALSO excludes transfer legs (`transferAccountId IS NOT
+ * NULL`), even when categorized — e.g. a "Transfer to Brokerage" row filed
+ * under Saving/Investing. Without this, the Categories tab's total would
+ * double-count money that's just moving between accounts, disagreeing with
+ * Overview's spending total. Specific-category mode deliberately stays
+ * inclusive of transfer legs: it's a ledger view of that one category (every
+ * row filed under it, transfer or not), not an aggregate that has to
+ * reconcile with anything else.
  */
 export function getCategoryStats(
   categoryId: number | null,
@@ -2570,9 +2566,10 @@ export function getCategoryStats(
   dbi: DB = db,
   now: Date = new Date()
 ): CategoryStats {
-  const { start, end } = statsPeriodBounds(period, now);
+  const { start, end } = statsPeriodBounds(period);
+  const mode = periodMode(period);
   const bucketKind: "month" | "payee" | "category" =
-    period !== "month" ? "month" : categoryId == null ? "category" : "payee";
+    mode !== "month" ? "month" : categoryId == null ? "category" : "payee";
 
   const conditions = [
     categoryId == null
@@ -2580,6 +2577,9 @@ export function getCategoryStats(
       : eq(schema.transactions.categoryId, categoryId),
     ne(schema.accounts.type, "tracking"),
   ];
+  if (categoryId == null) {
+    conditions.push(isNull(schema.transactions.transferAccountId));
+  }
   if (start != null) conditions.push(gte(schema.transactions.date, start));
   if (end != null) conditions.push(sql`${schema.transactions.date} < ${end}`);
 
@@ -2655,18 +2655,21 @@ export function getCategoryStats(
   }
 
   // Elapsed months for the average. For year and all-time, span from the
-  // category's first active month within the period through now, inclusive —
-  // so a first transaction mid-year (or mid-history) isn't averaged over the
-  // empty leading months. `buckets` is the per-month aggregation sorted
+  // category's first active month within the period through the LAST month
+  // of the period, capped at the current month — so a past year averages
+  // over its own 12 months (not through today), while the current year/all
+  // time still stops at now. `buckets` is the per-month aggregation sorted
   // ascending here, so buckets[0].key is that first active month.
-  const nowKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const nowKey = monthKeyOf(now);
   let monthsElapsed: number;
   if (count === 0) {
     monthsElapsed = 0;
-  } else if (period === "month") {
+  } else if (mode === "month") {
     monthsElapsed = 1;
   } else {
-    monthsElapsed = monthSpan(buckets[0].key, nowKey);
+    const periodEndKey = mode === "year" ? `${period}-12` : nowKey;
+    const cappedEndKey = periodEndKey < nowKey ? periodEndKey : nowKey;
+    monthsElapsed = monthSpan(buckets[0].key, cappedEndKey);
   }
 
   return {
@@ -2681,15 +2684,4 @@ export function getCategoryStats(
     bucketKind,
     currency: getCurrency(dbi),
   };
-}
-
-const STATS_MONTH_NAMES = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-/** "2026-07" -> "Jul 2026". */
-function monthShortLabel(monthKey: string): string {
-  const [year, mon] = monthKey.split("-").map(Number);
-  return `${STATS_MONTH_NAMES[mon - 1]} ${year}`;
 }
