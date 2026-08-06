@@ -532,7 +532,13 @@ export function getTrips(dbi: DB = db): { trips: Trip[]; currency: string } {
     .select({ id: schema.categories.id, name: schema.categories.name })
     .from(schema.categories)
     .innerJoin(schema.categoryGroups, eq(schema.categories.groupId, schema.categoryGroups.id))
-    .where(sql`lower(${schema.categoryGroups.name}) like '%trips%'`)
+    .where(
+      and(
+        sql`lower(${schema.categoryGroups.name}) like '%trips%'`,
+        // Ongoing funds (e.g. "Travel Fund") carry a monthly funding target; actual trips don't.
+        sql`not (${schema.categories.targetType} = 'monthly' and ${schema.categories.monthlyTarget} is not null)`,
+      ),
+    )
     .all();
 
   if (tripCategories.length === 0) return { trips: [], currency };
