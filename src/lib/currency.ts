@@ -26,6 +26,23 @@ export function formatMoneyWhole(minorUnits: number): string {
 }
 
 /**
+ * Format minor units with the currency code, rounded to whole units, Swiss
+ * grouping, sign-preserving — e.g. "CHF 1'235" / "-CHF 1'235". Unlike
+ * `formatCurrency`, the minus (when the rounded amount is non-zero) leads the
+ * whole string rather than sitting between the currency code and the number,
+ * matching `formatMoneyWhole`'s all-or-nothing rounding. Intended for chart
+ * axis ticks and value labels, which can legitimately be negative (a
+ * zero-crossing net-worth tick, a negative cashflow month) — `formatMoneyWhole`
+ * itself stays absolute-value on purpose for its other, always-positive
+ * callers.
+ */
+export function formatCurrencyWhole(minorUnits: number, currency: string): string {
+  const whole = Math.round(Math.abs(minorUnits) / 100);
+  const body = `${currency} ${formatMoneyWhole(minorUnits)}`;
+  return minorUnits < 0 && whole !== 0 ? `-${body}` : body;
+}
+
+/**
  * Parse user input into minor units. Accepts "120", "120.50", "1'200",
  * "1'200.50", optional leading minus and surrounding whitespace. Apostrophes
  * (and spaces) are treated as thousands separators. Returns null if unparseable.

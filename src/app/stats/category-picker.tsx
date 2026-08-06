@@ -5,10 +5,10 @@ import { useTransition } from "react";
 import type { CategoryGroupAdmin } from "@/lib/queries";
 
 /**
- * Category selector for the stats page. Native <select> with an "All
+ * Category selector for the category-stats page. Native <select> with an "All
  * categories" entry first, then categories grouped by category group (hidden
- * categories included, marked). Changing it navigates with the new `cat`
- * search param ("all" or an id) while preserving `period`.
+ * categories included, marked). Changing it navigates to /stats/categories
+ * with the new `cat` search param ("all" or an id) while preserving `period`.
  */
 export function CategoryPicker({
   groups,
@@ -28,7 +28,7 @@ export function CategoryPicker({
       disabled={pending}
       onChange={(e) => {
         const params = new URLSearchParams({ cat: e.target.value, period });
-        startTransition(() => router.push(`/stats?${params.toString()}`));
+        startTransition(() => router.push(`/stats/categories?${params.toString()}`));
       }}
       className="h-8 rounded-md border border-border bg-background px-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
       aria-label="Category"
