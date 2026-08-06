@@ -46,3 +46,4 @@ next-env.d.ts
 
 # Server-specific deployment notes
 DEPLOY.md
+deploy.sh

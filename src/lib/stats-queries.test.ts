@@ -464,6 +464,15 @@ describe("getTrips", () => {
     expect(tripB.costPerDay).toBe(20000);
   });
 
+  it("omits ongoing funds (monthly funding target) like a Travel Fund", () => {
+    sqlite.exec(`
+      INSERT INTO categories (id, group_id, name, monthly_target, target_type) VALUES (98, 30, 'Travel Fund', 50000, 'monthly');
+      INSERT INTO transactions (account_id, date, category_id, amount, payee) VALUES (1, '2025-08-01', 98, -10000, 'Airline');
+    `);
+    const { trips } = getTrips(makeDb());
+    expect(trips.some((t) => t.categoryId === 98)).toBe(false);
+  });
+
   it("omits trip categories with no transactions", () => {
     sqlite.exec(`
       INSERT INTO category_groups (id, name) VALUES (50, 'Trips Iceland');
