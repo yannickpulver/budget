@@ -72,7 +72,9 @@ export function GroupedBarChart(props: {
   const barWidth = Math.max(1, Math.min(MAX_BAR_WIDTH, (barsAreaWidth - (seriesCount - 1) * barGap) / seriesCount));
   const groupWidth = barWidth * seriesCount + barGap * (seriesCount - 1);
 
-  const labelIndices = new Set(thinIndices(bars.length, labelCapacity(plotWidth)));
+  const shownLabels = thinIndices(bars.length, labelCapacity(plotWidth));
+  const labelIndices = new Set(shownLabels);
+  const labelOrdinal = new Map(shownLabels.map((index, ordinal) => [index, ordinal]));
 
   return (
     <div className={className}>
@@ -151,12 +153,16 @@ export function GroupedBarChart(props: {
           })}
         </g>
 
-        {/* X labels, thinned so they never overlap even at ~75 slots. */}
+        {/* X labels, thinned so they never overlap even at ~75 slots. Every
+            second one also carries `chart-x-tick-alt`, which CSS drops below
+            480px — the viewBox scales with the container, so a phone needs
+            half as many labels as the thinning maths assumes. */}
         <g>
           {bars.map((bar, i) => {
             if (!labelIndices.has(i)) return null;
             const slotCenter = MARGIN.left + slotWidth * i + slotWidth / 2;
             const anchor = i === 0 ? "start" : i === bars.length - 1 ? "end" : "middle";
+            const alt = labelOrdinal.get(i)! % 2 === 1 && i !== bars.length - 1;
             return (
               <text
                 key={bar.key}
@@ -165,6 +171,7 @@ export function GroupedBarChart(props: {
                 textAnchor={anchor}
                 fontSize={CHART_GEOMETRY.tickFontSize}
                 fill={CHART_GEOMETRY.axisInk}
+                className={alt ? "chart-tick chart-x-tick-alt" : "chart-tick"}
               >
                 {bar.label}
               </text>

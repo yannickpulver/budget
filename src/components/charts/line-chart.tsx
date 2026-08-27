@@ -69,7 +69,9 @@ export function LineChart(props: {
   const baselineY = MARGIN.top + plotHeight;
   const areaPath = `${linePath} L${xAt(points.length - 1).toFixed(2)},${baselineY.toFixed(2)} L${xAt(0).toFixed(2)},${baselineY.toFixed(2)} Z`;
 
-  const labelIndices = new Set(thinIndices(points.length, labelCapacity(plotWidth)));
+  const shownLabels = thinIndices(points.length, labelCapacity(plotWidth));
+  const labelIndices = new Set(shownLabels);
+  const labelOrdinal = new Map(shownLabels.map((index, ordinal) => [index, ordinal]));
   const last = points[points.length - 1];
   const lastX = xAt(points.length - 1);
   const lastY = yAt(last.value);
@@ -154,17 +156,23 @@ export function LineChart(props: {
           fontSize={CHART_GEOMETRY.tickFontSize + 1}
           fontWeight={600}
           fill="var(--foreground)"
+          className="chart-callout"
         >
           {formatValue(last.value)}
         </text>
       </g>
 
-      {/* X labels, thinned so they never overlap; first and last are always kept. */}
+      {/* X labels, thinned so they never overlap; first and last are always
+          kept. Every second one also carries `chart-x-tick-alt`, which CSS
+          drops below 480px — the whole viewBox scales down with the container,
+          so a phone needs half as many labels as the thinning maths assumes. */}
       <g>
         {points.map((p, i) => {
           if (!labelIndices.has(i)) return null;
           const x = xAt(i);
           const anchor = i === 0 ? "start" : i === points.length - 1 ? "end" : "middle";
+          const isLast = i === points.length - 1;
+          const alt = labelOrdinal.get(i)! % 2 === 1 && !isLast;
           return (
             <text
               key={p.key}
@@ -173,6 +181,7 @@ export function LineChart(props: {
               textAnchor={anchor}
               fontSize={CHART_GEOMETRY.tickFontSize}
               fill={CHART_GEOMETRY.axisInk}
+              className={alt ? "chart-tick chart-x-tick-alt" : "chart-tick"}
             >
               {p.label}
             </text>

@@ -231,11 +231,11 @@ export function ImportCsvDialog({
         </div>
       )}
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogTrigger render={<Button size="sm" variant="outline" />}>
+        <DialogTrigger render={<Button size="sm" variant="outline" aria-label="Import CSV" />}>
           <Upload className="size-3.5" />
-          Import CSV
+          <span className="hidden md:inline">Import CSV</span>
         </DialogTrigger>
-        <DialogContent className="max-w-full sm:max-w-5xl">
+        <DialogContent className="max-h-[90dvh] max-w-full overflow-y-auto sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle>Import CSV</DialogTitle>
           </DialogHeader>
@@ -282,8 +282,8 @@ export function ImportCsvDialog({
 
           {rows && (
             <div className="flex flex-col gap-2">
-              <div className="max-h-[28rem] overflow-y-auto rounded-md border border-border">
-                <table className="w-full text-xs">
+              <div className="max-h-[60dvh] overflow-x-auto overflow-y-auto rounded-md border border-border md:max-h-[28rem]">
+                <table className="w-full min-w-[36rem] text-xs">
                   <thead className="sticky top-0 bg-muted text-muted-foreground uppercase">
                     <tr>
                       <th className="w-8 px-2.5 py-1.5" />

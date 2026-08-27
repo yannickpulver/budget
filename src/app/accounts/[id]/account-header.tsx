@@ -115,9 +115,9 @@ export function AccountHeader({
 
   return (
     <header className="border-b border-border px-4 py-3">
-      <div className="flex items-start justify-between gap-6">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-6">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <AccountIconPopover accountId={detail.id} type={detail.type} icon={detail.icon} />
             {editingName ? (
               <Input
@@ -135,7 +135,7 @@ export function AccountHeader({
                     setEditingName(false);
                   }
                 }}
-                className="h-8 max-w-xs text-lg font-semibold"
+                className="h-8 max-w-xs min-w-0 text-lg font-semibold"
               />
             ) : (
               <button
@@ -168,7 +168,8 @@ export function AccountHeader({
             {detail.closed && <Badge variant="secondary">Closed</Badge>}
           </div>
 
-          <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
+          {/* Two tiles side by side on a phone, one line on desktop. */}
+          <div className="mt-1.5 grid grid-cols-2 gap-2 text-xs text-muted-foreground md:flex md:items-center md:gap-3">
             <span>
               Cleared:{" "}
               <span className={cn("tabular-nums", balanceClass(detail.clearedBalance))}>
@@ -185,7 +186,7 @@ export function AccountHeader({
           {error && <p className="mt-1.5 text-xs text-destructive">{error}</p>}
         </div>
 
-        <div className="flex shrink-0 flex-col items-end gap-2">
+        <div className="flex shrink-0 flex-col gap-2 md:items-end">
           <div className="flex items-center gap-2">
             <div className={cn("text-2xl font-semibold tabular-nums", balanceClass(detail.balance))}>
               {formatCurrency(detail.balance, detail.currency)}
@@ -194,10 +195,16 @@ export function AccountHeader({
               <SetBalancePopover accountId={detail.id} balance={detail.balance} />
             )}
           </div>
-          <div className="flex gap-1.5">
-            <Button size="sm" variant="outline" onClick={fetchPayeeIcons} disabled={iconsPending}>
+          <div className="flex flex-wrap gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={fetchPayeeIcons}
+              disabled={iconsPending}
+              aria-label="Fetch payee icons"
+            >
               <ImageDown className={cn("size-3.5", iconsPending && "animate-spin")} />
-              Fetch payee icons
+              <span className="hidden md:inline">Fetch payee icons</span>
             </Button>
             <ImportCsvDialog
               accountId={detail.id}
@@ -220,7 +227,8 @@ export function AccountHeader({
                   : undefined
               }
             >
-              {detail.closed ? "Reopen" : "Close account"}
+              {detail.closed ? "Reopen" : "Close"}
+              <span className="hidden md:inline">{detail.closed ? "" : " account"}</span>
             </Button>
             {detail.transactionCount === 0 && (
               <Button size="sm" variant="destructive" onClick={remove} disabled={pending}>
