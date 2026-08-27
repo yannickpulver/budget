@@ -48,7 +48,10 @@ export const categories = sqliteTable("categories", {
     .references(() => categoryGroups.id),
   name: text("name").notNull(),
   sort: integer("sort").notNull().default(0),
-  hidden: integer("hidden", { mode: "boolean" }).notNull().default(false),
+  // Display-only: the month (YYYY-MM) from which this category is hidden from
+  // the budget. Viewing any earlier month still shows it. Null = never hidden.
+  // Purely cosmetic — budget math and totals ignore this flag.
+  hiddenFrom: text("hidden_from"),
   // Rappen (minor units). Null = no goal. The target amount for both goal
   // types: "monthly" assigns this every month, "balance" saves up to this
   // total available.

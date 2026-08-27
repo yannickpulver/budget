@@ -76,7 +76,7 @@ export default async function CategoryStatsPage({
         <div className="mb-1 flex items-baseline gap-2">
           <h2 className="text-lg font-semibold">
             {selected == null ? "All categories" : selected.name}
-            {selected?.hidden && (
+            {selected?.hiddenFrom != null && (
               <span className="ml-1.5 text-xs font-normal text-muted-foreground">(hidden)</span>
             )}
           </h2>

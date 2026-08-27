@@ -357,11 +357,11 @@ export function prevMonthKey(month: string): string {
 }
 
 /**
- * Display-only: whether an account hidden from `hiddenFrom` (YYYY-MM) onward
- * should be hidden when viewing `month`. Lexicographic compare is exact for
- * zero-padded YYYY-MM keys.
+ * Display-only: whether something hidden from `hiddenFrom` (YYYY-MM) onward
+ * (an account or a category) should be hidden when viewing `month`.
+ * Lexicographic compare is exact for zero-padded YYYY-MM keys.
  */
-export function isAccountHiddenForMonth(hiddenFrom: string | null, month: string): boolean {
+export function isHiddenForMonth(hiddenFrom: string | null, month: string): boolean {
   return hiddenFrom != null && month >= hiddenFrom;
 }
 

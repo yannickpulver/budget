@@ -4,6 +4,7 @@ import { db } from "@/db";
 import {
   createCategory as createCategoryRow,
   createCategoryGroup as createCategoryGroupRow,
+  currentMonth,
   deleteCategory as deleteCategoryRow,
   deleteCategoryGroup as deleteCategoryGroupRow,
   moveCategoryToGroup as moveCategoryToGroupRow,
@@ -12,7 +13,7 @@ import {
   reorderCategories as reorderCategoriesRow,
   reorderCategoryGroups as reorderCategoryGroupsRow,
   setCategoryGroupHidden as setCategoryGroupHiddenRow,
-  setCategoryHidden as setCategoryHiddenRow,
+  setCategoryHiddenFrom as setCategoryHiddenFromRow,
   type SettingsResult,
 } from "@/lib/queries";
 import { withUndoStep } from "@/lib/undo";
@@ -79,7 +80,7 @@ export async function renameCategoryAction(id: number, name: string): Promise<Ac
 
 export async function setCategoryHiddenAction(id: number, hidden: boolean): Promise<ActionResult> {
   withUndoStep(hidden ? "Hide category" : "Show category", () =>
-    setCategoryHiddenRow(db, id, hidden)
+    setCategoryHiddenFromRow(db, id, hidden ? currentMonth() : null)
   );
   refresh();
   return { ok: true };

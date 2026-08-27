@@ -264,10 +264,12 @@ function CategoryBlock({
 
   const otherGroups = allGroups.filter((g) => g.id !== group.id);
 
+  const hidden = category.hiddenFrom != null;
+
   function toggleHidden() {
     setError(null);
     startTransition(async () => {
-      await setCategoryHiddenAction(category.id, !category.hidden);
+      await setCategoryHiddenAction(category.id, !hidden);
     });
   }
 
@@ -287,7 +289,7 @@ function CategoryBlock({
       className={cn(
         "flex items-center justify-between gap-2 rounded-md px-2 py-1 text-sm",
         (pending || isDragging) && "opacity-60",
-        category.hidden && "text-muted-foreground"
+        hidden && "text-muted-foreground"
       )}
     >
       <div className="flex min-w-0 items-center gap-1">
@@ -304,7 +306,12 @@ function CategoryBlock({
       </div>
       <div className="flex shrink-0 items-center gap-1">
         {error && <span className="text-xs text-destructive">{error}</span>}
-        {category.hidden && <span className="text-xs text-muted-foreground">Hidden</span>}
+        {hidden && (
+          <span className="text-xs text-muted-foreground">
+            {/* "0000-01" is the migration sentinel for categories hidden before hiding became month-aware. */}
+            {category.hiddenFrom === "0000-01" ? "Hidden" : `Hidden from ${category.hiddenFrom}`}
+          </span>
+        )}
         {otherGroups.length > 0 && (
           <Select
             value=""
@@ -330,9 +337,9 @@ function CategoryBlock({
           variant="ghost"
           onClick={toggleHidden}
           disabled={pending}
-          title={category.hidden ? "Show category" : "Hide category"}
+          title={hidden ? "Show category" : "Hide category"}
         >
-          {category.hidden ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+          {hidden ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
         </Button>
         <Button
           size="icon-xs"
