@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { ActivityCell } from "./activity-cell";
 import { AssignCell } from "./assign-cell";
 import { AvailablePill } from "./available-pill";
+import { CategoryContextMenu } from "./category-context-menu";
 import { GoalControl } from "./goal-control";
 import { BudgetRowSheet } from "./row-sheet";
 
@@ -434,36 +435,40 @@ function Row({
     category.avgSpend != null ? `ø ${currency} ${formatMoneyWhole(category.avgSpend)}` : undefined;
 
   return (
-    <div className={cn(GRID, "px-2 py-0.5", underfunded && "bg-amber-50")}>
-      <div className="hidden min-w-0 items-center justify-between gap-2 pr-2 md:flex">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-sm">{category.name}</span>
-          {category.avgSpend != null && (
-            <span
-              className="shrink-0 text-xs tabular-nums text-muted-foreground/50"
-              title={`Average spent over the last 6 months: ${formatCurrency(category.avgSpend, currency)}`}
-            >
-              {avgHint}
-            </span>
-          )}
+    <CategoryContextMenu categoryId={category.id} month={month}>
+      <div className={cn(GRID, "px-2 py-0.5", underfunded && "bg-amber-50")}>
+        <div className="hidden min-w-0 items-center justify-between gap-2 pr-2 md:flex">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-sm">{category.name}</span>
+            {category.avgSpend != null && (
+              <span
+                className="shrink-0 text-xs tabular-nums text-muted-foreground/50"
+                title={`Average spent over the last 6 months: ${formatCurrency(category.avgSpend, currency)}`}
+              >
+                {avgHint}
+              </span>
+            )}
+          </div>
+          {goalControl}
         </div>
-        {goalControl}
+
+        <BudgetRowSheet
+          name={category.name}
+          hint={avgHint}
+          underfunded={underfunded}
+          remaining={formatMoney(category.goal?.remaining ?? 0)}
+          assignCell={assignCell}
+          activityCell={activityCell}
+          availablePill={availablePill}
+          goalControl={goalControl}
+          month={month}
+          categoryId={category.id}
+        />
+
+        <div className="hidden md:block">{assignCell}</div>
+        <div className="hidden md:block">{activityCell}</div>
+        <div className="flex justify-end pr-1">{availablePill}</div>
       </div>
-
-      <BudgetRowSheet
-        name={category.name}
-        hint={avgHint}
-        underfunded={underfunded}
-        remaining={formatMoney(category.goal?.remaining ?? 0)}
-        assignCell={assignCell}
-        activityCell={activityCell}
-        availablePill={availablePill}
-        goalControl={goalControl}
-      />
-
-      <div className="hidden md:block">{assignCell}</div>
-      <div className="hidden md:block">{activityCell}</div>
-      <div className="flex justify-end pr-1">{availablePill}</div>
-    </div>
+    </CategoryContextMenu>
   );
 }

@@ -227,7 +227,7 @@ describe("setMonthlyTarget", () => {
 });
 
 describe("closeCategory", () => {
-  it("releases Available back to RTA, clears the target, and hides the category", async () => {
+  it("releases Available back to RTA, clears the target, and hides the category from this month on", async () => {
     const { db } = await import("@/db");
     const { closeCategory } = await import("./actions");
     const { currentMonth } = await import("@/lib/queries");
@@ -244,7 +244,7 @@ describe("closeCategory", () => {
     await closeCategory(month, category.id);
 
     const row = db.select().from(schema.categories).where(eq(schema.categories.id, category.id)).get();
-    expect(row?.hidden).toBe(true);
+    expect(row?.hiddenFrom).toBe(month);
     expect(row?.monthlyTarget).toBeNull();
     expect(row?.targetType).toBe("monthly");
     expect(row?.targetDate).toBeNull();
@@ -268,7 +268,7 @@ describe("closeCategory", () => {
     await closeCategory("2020-01", category.id);
 
     const row = db.select().from(schema.categories).where(eq(schema.categories.id, category.id)).get();
-    expect(row?.hidden).toBe(false);
+    expect(row?.hiddenFrom).toBeNull();
     const assignment = db.select().from(schema.assignments).all().find((r) => r.categoryId === category.id);
     expect(assignment?.amount).toBe(5000);
   });
@@ -294,6 +294,55 @@ describe("closeCategory", () => {
     await closeCategory(month, category.id);
 
     const row = db.select().from(schema.categories).where(eq(schema.categories.id, category.id)).get();
-    expect(row?.hidden).toBe(false);
+    expect(row?.hiddenFrom).toBeNull();
+  });
+});
+
+describe("hideCategoryFromMonth", () => {
+  it("releases positive Available back to Ready to Assign for the current month, keeping the goal intact", async () => {
+    const { db } = await import("@/db");
+    const { hideCategoryFromMonth } = await import("./actions");
+    const { currentMonth, getBudgetView } = await import("@/lib/queries");
+    const month = currentMonth();
+
+    const [group] = db.insert(schema.categoryGroups).values({ name: "Saving" }).returning().all();
+    const [category] = db
+      .insert(schema.categories)
+      .values({ groupId: group.id, name: "Trip", monthlyTarget: 200000 })
+      .returning()
+      .all();
+    db.insert(schema.assignments).values({ month, categoryId: category.id, amount: 5000 }).run();
+
+    const rtaBefore = getBudgetView(month).readyToAssign;
+
+    await hideCategoryFromMonth(month, category.id);
+
+    const row = db.select().from(schema.categories).where(eq(schema.categories.id, category.id)).get();
+    expect(row?.hiddenFrom).toBe(month);
+    // Unlike closeCategory, the goal survives — hiding isn't "this is finished".
+    expect(row?.monthlyTarget).toBe(200000);
+    const assignment = db.select().from(schema.assignments).all().find((r) => r.categoryId === category.id);
+    expect(assignment?.amount).toBe(0);
+    expect(getBudgetView(month).readyToAssign).toBe(rtaBefore + 5000);
+  });
+
+  it("moves nothing and just hides for a month that isn't the current month", async () => {
+    const { db } = await import("@/db");
+    const { hideCategoryFromMonth } = await import("./actions");
+
+    const [group] = db.insert(schema.categoryGroups).values({ name: "Saving" }).returning().all();
+    const [category] = db
+      .insert(schema.categories)
+      .values({ groupId: group.id, name: "Trip" })
+      .returning()
+      .all();
+    db.insert(schema.assignments).values({ month: "2020-01", categoryId: category.id, amount: 5000 }).run();
+
+    await hideCategoryFromMonth("2020-01", category.id);
+
+    const row = db.select().from(schema.categories).where(eq(schema.categories.id, category.id)).get();
+    expect(row?.hiddenFrom).toBe("2020-01");
+    const assignment = db.select().from(schema.assignments).all().find((r) => r.categoryId === category.id);
+    expect(assignment?.amount).toBe(5000);
   });
 });

@@ -275,3 +275,26 @@ describe("getBudgetView goals start month", () => {
     }
   });
 });
+
+describe("getBudgetView hiddenFrom", () => {
+  it("shows a category for months before hiddenFrom and hides it from that month on", async () => {
+    const { db } = await import("@/db");
+    const { getBudgetView } = await import("./queries");
+
+    const [group] = db.insert(schema.categoryGroups).values({ name: "Saving" }).returning().all();
+    const [trip] = db
+      .insert(schema.categories)
+      .values({ groupId: group.id, name: "Trip", hiddenFrom: "2026-08" })
+      .returning()
+      .all();
+
+    for (const month of ["2026-06", "2026-07"]) {
+      const cats = getBudgetView(month).groups.flatMap((g) => g.categories);
+      expect(cats.some((c) => c.id === trip.id)).toBe(true);
+    }
+    for (const month of ["2026-08", "2026-09"]) {
+      const cats = getBudgetView(month).groups.flatMap((g) => g.categories);
+      expect(cats.some((c) => c.id === trip.id)).toBe(false);
+    }
+  });
+});

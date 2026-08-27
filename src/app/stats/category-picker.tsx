@@ -38,7 +38,7 @@ export function CategoryPicker({
         <optgroup key={group.id} label={group.name}>
           {group.categories.map((category) => (
             <option key={category.id} value={category.id}>
-              {category.hidden ? `${category.name} (hidden)` : category.name}
+              {category.hiddenFrom != null ? `${category.name} (hidden)` : category.name}
             </option>
           ))}
         </optgroup>

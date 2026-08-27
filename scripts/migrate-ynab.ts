@@ -79,7 +79,7 @@ function runImport(result: ImportResult) {
       .values({
         groupId,
         name: category.name,
-        hidden: category.hidden,
+        hiddenFrom: category.hidden ? "0000-01" : null,
         sort: category.sort,
       })
       .returning({ id: categories.id })

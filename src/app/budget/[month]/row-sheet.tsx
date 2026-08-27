@@ -1,7 +1,8 @@
 "use client";
 
 import { ChevronRight } from "lucide-react";
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { hideCategoryFromMonth } from "../actions";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
@@ -22,6 +23,8 @@ export function BudgetRowSheet({
   activityCell,
   availablePill,
   goalControl,
+  month,
+  categoryId,
 }: {
   name: string;
   /** Muted secondary line, e.g. the 6-month average spend. */
@@ -33,8 +36,16 @@ export function BudgetRowSheet({
   activityCell: React.ReactNode;
   availablePill: React.ReactNode;
   goalControl: React.ReactNode;
+  month: string;
+  categoryId: number;
 }) {
   const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+
+  function hide() {
+    setOpen(false);
+    startTransition(() => hideCategoryFromMonth(month, categoryId));
+  }
 
   return (
     <>
@@ -73,10 +84,18 @@ export function BudgetRowSheet({
             </Field>
           </div>
 
-          <div className="px-4 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <div className="flex flex-col gap-2 px-4 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))]">
             <Button variant="outline" className="w-full" onClick={() => setOpen(false)}>
               Done
             </Button>
+            <button
+              type="button"
+              onClick={hide}
+              disabled={pending}
+              className="text-center text-xs text-muted-foreground hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
+            >
+              Hide from this month
+            </button>
           </div>
         </SheetContent>
       </Sheet>

@@ -10,13 +10,14 @@
  * `data_version` pragma — see `SnapshotStore`.
  */
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { and, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import {
   computeBalanceGoalStatus,
   computeCategoryActivityEntries,
   computeGoalStatus,
   computeMonthSnapshot,
+  isHiddenForMonth,
   monthKey,
   nextMonthKey,
   prevMonthKey,
@@ -50,7 +51,8 @@ export interface CategoryMeta {
   groupId: number;
   name: string;
   sort: number;
-  hidden: boolean;
+  /** Month (YYYY-MM) from which this category is hidden from the budget; null = never. */
+  hiddenFrom: string | null;
   monthlyTarget: number | null;
   targetType: TargetType;
   targetDate: string | null;
@@ -139,7 +141,7 @@ export function loadBudgetData(dbi: DB): BudgetData {
       groupId: schema.categories.groupId,
       name: schema.categories.name,
       sort: schema.categories.sort,
-      hidden: schema.categories.hidden,
+      hiddenFrom: schema.categories.hiddenFrom,
       monthlyTarget: schema.categories.monthlyTarget,
       targetType: schema.categories.targetType,
       targetDate: schema.categories.targetDate,
@@ -516,7 +518,7 @@ export function getBudgetView(month: string): BudgetView {
     .sort((a, b) => a.sort - b.sort)
     .map((group) => {
       const cats = (categoriesByGroup.get(group.id) ?? [])
-        .filter((category) => !category.hidden)
+        .filter((category) => !isHiddenForMonth(category.hiddenFrom, month))
         .sort((a, b) => a.sort - b.sort)
         .map((category): CategoryView => {
           const cell =
@@ -979,7 +981,7 @@ export function getCategoryOptions(dbi: DB = db): CategoryGroupOption[] {
       sort: schema.categories.sort,
     })
     .from(schema.categories)
-    .where(eq(schema.categories.hidden, false))
+    .where(or(isNull(schema.categories.hiddenFrom), gt(schema.categories.hiddenFrom, currentMonth())))
     .all();
 
   const byGroup = new Map<number, CategoryOption[]>();
@@ -1035,7 +1037,8 @@ export interface CategoryAdmin {
   id: number;
   name: string;
   sort: number;
-  hidden: boolean;
+  /** Month (YYYY-MM) from which this category is hidden from the budget; null = never. */
+  hiddenFrom: string | null;
   monthlyTarget: number | null;
   /** Used by a transaction, an assignment, or as a credit account's payment category — delete is blocked, hide only. */
   referenced: boolean;
@@ -1082,7 +1085,7 @@ export function listCategoryGroupsAdmin(dbi: DB = db): CategoryGroupAdmin[] {
       id: c.id,
       name: c.name,
       sort: c.sort,
-      hidden: c.hidden,
+      hiddenFrom: c.hiddenFrom,
       monthlyTarget: c.monthlyTarget,
       referenced: referencedIds.has(c.id),
     });
@@ -1156,8 +1159,9 @@ export function renameCategory(dbi: DB, id: number, name: string): void {
   dbi.update(schema.categories).set({ name }).where(eq(schema.categories.id, id)).run();
 }
 
-export function setCategoryHidden(dbi: DB, id: number, hidden: boolean): void {
-  dbi.update(schema.categories).set({ hidden }).where(eq(schema.categories.id, id)).run();
+/** Sets (YYYY-MM) or clears (`null`) the month from which the category is hidden from the budget. */
+export function setCategoryHiddenFrom(dbi: DB, id: number, month: string | null): void {
+  dbi.update(schema.categories).set({ hiddenFrom: month }).where(eq(schema.categories.id, id)).run();
 }
 
 function isCategoryReferenced(dbi: DB, id: number): boolean {
@@ -1851,7 +1855,7 @@ export function buildImportPreview(dbi: DB, accountId: number, rows: ParsedImpor
   for (const c of dbi
     .select({ id: schema.categories.id, name: schema.categories.name })
     .from(schema.categories)
-    .where(eq(schema.categories.hidden, false))
+    .where(or(isNull(schema.categories.hiddenFrom), gt(schema.categories.hiddenFrom, currentMonth())))
     .all()) {
     if (!categoryIdByName.has(c.name.toLowerCase())) categoryIdByName.set(c.name.toLowerCase(), c.id);
     categoryNameById.set(c.id, c.name);
