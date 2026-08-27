@@ -12,8 +12,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { PayeeInput } from "@/components/payee-input";
 import { formatCurrency } from "@/lib/currency";
+import type { CategoryGroupOption, TransferTarget } from "@/lib/queries";
 import { cn } from "@/lib/utils";
+import { CategoryTransferSelect, type CategorySelection } from "./category-transfer-select";
 import {
   confirmImportAction,
   previewImportAction,
@@ -25,13 +28,44 @@ interface RowState extends ImportPreviewRowDto {
   checked: boolean;
 }
 
+/** Row state -> the shape the shared category/transfer picker speaks. */
+function selectionOf(row: RowState): CategorySelection {
+  if (row.transferAccountId != null) {
+    return { kind: "transfer", accountId: row.transferAccountId, categoryId: row.categoryId };
+  }
+  if (row.categoryId != null) return { kind: "category", categoryId: row.categoryId };
+  return { kind: "rta" };
+}
+
+/** Picker selection -> row state. Category and transfer are mutually exclusive. */
+function patchFor(selection: CategorySelection): Pick<RowState, "categoryId" | "transferAccountId"> {
+  if (selection.kind === "transfer") {
+    return { categoryId: selection.categoryId, transferAccountId: selection.accountId };
+  }
+  return { categoryId: selection.kind === "category" ? selection.categoryId : null, transferAccountId: null };
+}
+
 /**
  * "Import CSV" flow for an account's register: upload — via the file picker or
  * by dropping a CSV anywhere on the account page — -> server-parsed preview
  * (NEW/DUPLICATE per row, toggleable) -> confirm inserts the checked rows.
+ * Payee and category/transfer are editable per row before confirming.
  * Parse errors block the whole file — nothing is inserted.
  */
-export function ImportCsvDialog({ accountId, currency }: { accountId: number; currency: string }) {
+export function ImportCsvDialog({
+  accountId,
+  currency,
+  groups,
+  transferTargets,
+  payeeSuggestions,
+}: {
+  accountId: number;
+  currency: string;
+  groups: CategoryGroupOption[];
+  /** Already excludes the account being imported into. */
+  transferTargets: TransferTarget[];
+  payeeSuggestions: string[];
+}) {
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
   const [errors, setErrors] = useState<ImportRowErrorDto[] | null>(null);
@@ -131,8 +165,8 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
     };
   }, [onFileChosen]);
 
-  function toggleRow(line: number) {
-    setRows((prev) => prev && prev.map((r) => (r.line === line ? { ...r, checked: !r.checked } : r)));
+  function updateRow(line: number, patch: Partial<RowState>) {
+    setRows((prev) => prev && prev.map((r) => (r.line === line ? { ...r, ...patch } : r)));
   }
 
   function confirm() {
@@ -179,7 +213,7 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
           <Upload className="size-3.5" />
           Import CSV
         </DialogTrigger>
-        <DialogContent className="max-w-full sm:max-w-3xl">
+        <DialogContent className="max-w-full sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle>Import CSV</DialogTitle>
           </DialogHeader>
@@ -234,7 +268,7 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
                       <th className="px-2.5 py-1.5 text-left font-medium">Status</th>
                       <th className="px-2.5 py-1.5 text-left font-medium">Date</th>
                       <th className="px-2.5 py-1.5 text-left font-medium">Payee</th>
-                      <th className="px-2.5 py-1.5 text-left font-medium">Category</th>
+                      <th className="px-2.5 py-1.5 text-left font-medium">Category / Transfer</th>
                       <th className="px-2.5 py-1.5 text-left font-medium">Memo</th>
                       <th className="px-2.5 py-1.5 text-right font-medium">Amount</th>
                     </tr>
@@ -246,7 +280,7 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
                           <input
                             type="checkbox"
                             checked={r.checked}
-                            onChange={() => toggleRow(r.line)}
+                            onChange={() => updateRow(r.line, { checked: !r.checked })}
                             aria-label={`Include row ${r.line}`}
                           />
                         </td>
@@ -261,14 +295,23 @@ export function ImportCsvDialog({ accountId, currency }: { accountId: number; cu
                           </span>
                         </td>
                         <td className="px-2.5 py-1.5 tabular-nums whitespace-nowrap">{r.date}</td>
-                        <td className="max-w-40 truncate px-2.5 py-1.5" title={r.payee}>
-                          {r.payee || "—"}
+                        <td className="w-48 px-2.5 py-1.5">
+                          <PayeeInput
+                            suggestions={payeeSuggestions}
+                            value={r.payee}
+                            onValueChange={(payee) => updateRow(r.line, { payee })}
+                            placeholder="Payee"
+                            aria-label={`Payee for row ${r.line}`}
+                            className="h-7 text-xs"
+                          />
                         </td>
-                        <td
-                          className="max-w-32 truncate px-2.5 py-1.5 text-muted-foreground"
-                          title={r.transferAccountName ?? r.categoryName ?? undefined}
-                        >
-                          {r.transferAccountName != null ? `→ ${r.transferAccountName}` : (r.categoryName ?? "—")}
+                        <td className="w-56 px-2.5 py-1.5">
+                          <CategoryTransferSelect
+                            groups={groups}
+                            transferTargets={transferTargets}
+                            value={selectionOf(r)}
+                            onChange={(selection) => updateRow(r.line, patchFor(selection))}
+                          />
                         </td>
                         <td className="max-w-40 truncate px-2.5 py-1.5 text-muted-foreground" title={r.memo}>
                           {r.memo || "—"}
