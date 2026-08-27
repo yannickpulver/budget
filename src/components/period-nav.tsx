@@ -40,7 +40,9 @@ export function PeriodNav({
       <NavArrow href={prevHref} label={prevAriaLabel}>
         <ChevronLeft className="size-4" />
       </NavArrow>
-      <div className={cn("min-w-32 text-center text-sm font-medium", labelClassName)}>{label}</div>
+      {/* No min width on a phone — 8rem of empty label box crowds out the
+          arrows and the "Today" shortcut at 390px. */}
+      <div className={cn("text-center text-sm font-medium md:min-w-32", labelClassName)}>{label}</div>
       <NavArrow href={nextHref} label={nextAriaLabel}>
         <ChevronRight className="size-4" />
       </NavArrow>

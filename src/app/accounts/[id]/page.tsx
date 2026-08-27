@@ -18,6 +18,8 @@ import { AccountHeader } from "./account-header";
 import { AddTransactionRow } from "./add-transaction-row";
 import { REGISTER_GRID } from "./grid";
 import { HoldingsSection } from "./holdings-section";
+import { MobileAddTransaction } from "./mobile-add-transaction";
+import { MobileTransactionRow } from "./mobile-transaction-row";
 import { SearchBox } from "./search-box";
 import { UncategorizedFilter } from "./uncategorized-filter";
 import { TransactionRow } from "./transaction-row";
@@ -72,22 +74,24 @@ export default async function AccountPage({
       {holdingsView && <HoldingsSection accountId={id} view={holdingsView} />}
 
       <div className="flex items-center justify-between gap-4 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2 md:flex-none">
           <SearchBox />
           <UncategorizedFilter active={uncategorizedOnly} count={register.uncategorizedTotal} />
         </div>
-        <div className="text-xs text-muted-foreground">
+        <div className="hidden text-xs text-muted-foreground md:block">
           {register.total} transaction{register.total === 1 ? "" : "s"}
         </div>
       </div>
 
-      <div className="flex-1 px-4 pb-4">
+      {/* Extra bottom room below `md` so the floating add button never covers
+          the last row or the pagination. */}
+      <div className="flex-1 px-2 pb-24 md:px-4 md:pb-4">
         <div
           className={cn(
             REGISTER_GRID,
             // Sticky so the column labels survive scrolling a long register.
             // Opaque background, or rows would show through underneath.
-            "sticky top-0 z-20 bg-background px-2 pt-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase"
+            "sticky top-0 z-20 hidden bg-background px-2 pt-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase md:grid"
           )}
         >
           <div>Date</div>
@@ -100,7 +104,7 @@ export default async function AccountPage({
         </div>
 
         <div className="rounded-lg border border-border">
-          <div className="border-b border-border">
+          <div className="hidden border-b border-border md:block">
             <AddTransactionRow
               accountId={id}
               groups={groups}
@@ -111,18 +115,32 @@ export default async function AccountPage({
           </div>
 
           <div className="divide-y divide-border/60">
+            {/* One wrapper per transaction so `divide-y` draws a single rule
+                between rows — the two variants below are mutually exclusive
+                (`hidden md:grid` / `md:hidden`), never both visible. */}
             {register.rows.map((row) => (
-              <TransactionRow
-                key={row.id}
-                row={row}
-                accountId={id}
-                accountType={detail.type}
-                groups={groups}
-                accountsById={accountsById}
-                payeeSuggestions={payeeSuggestions}
-                transferTargets={transferTargets}
-                iconUrl={payeeIcons[row.payee]}
-              />
+              <div key={row.id}>
+                <TransactionRow
+                  row={row}
+                  accountId={id}
+                  accountType={detail.type}
+                  groups={groups}
+                  accountsById={accountsById}
+                  payeeSuggestions={payeeSuggestions}
+                  transferTargets={transferTargets}
+                  iconUrl={payeeIcons[row.payee]}
+                />
+                <MobileTransactionRow
+                  row={row}
+                  accountId={id}
+                  accountType={detail.type}
+                  groups={groups}
+                  accountsById={accountsById}
+                  payeeSuggestions={payeeSuggestions}
+                  transferTargets={transferTargets}
+                  iconUrl={payeeIcons[row.payee]}
+                />
+              </div>
             ))}
             {register.rows.length === 0 && (
               <div className="p-6 text-center text-sm text-muted-foreground">
@@ -135,6 +153,14 @@ export default async function AccountPage({
         {totalPages > 1 && (
           <Pagination accountId={id} page={register.page} totalPages={totalPages} search={search} />
         )}
+
+        <MobileAddTransaction
+          accountId={id}
+          groups={groups}
+          transferTargets={transferTargets}
+          payeeSuggestions={payeeSuggestions}
+          defaultCategoryId={detail.type === "giftcard" ? detail.linkedCategoryId : null}
+        />
       </div>
     </div>
   );

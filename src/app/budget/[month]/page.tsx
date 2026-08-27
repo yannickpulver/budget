@@ -23,6 +23,7 @@ import { ActivityCell } from "./activity-cell";
 import { AssignCell } from "./assign-cell";
 import { AvailablePill } from "./available-pill";
 import { GoalControl } from "./goal-control";
+import { BudgetRowSheet } from "./row-sheet";
 
 const MONTH_RE = /^(\d{4})-(\d{2})$/;
 
@@ -42,7 +43,11 @@ export async function generateMetadata({
   return { title: isValidMonth(month) ? `${monthLabel(month)} · budget` : "budget" };
 }
 
-const GRID = "grid grid-cols-[minmax(12rem,1fr)_7.5rem_7.5rem_8.5rem] items-center gap-x-2";
+// Below `md` only two columns survive — the category (a tap target that opens
+// the row sheet) and Available. Assigned/Activity cells are `hidden md:block`,
+// so they don't occupy a grid cell at all on a phone.
+const GRID =
+  "grid grid-cols-[1fr_auto] items-center gap-x-2 md:grid-cols-[minmax(12rem,1fr)_7.5rem_7.5rem_8.5rem]";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -139,8 +144,8 @@ export default async function BudgetPage({
               <>
                 <div className={cn(GRID, "px-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase")}>
                   <div>Category</div>
-                  <div className="text-right">Assigned</div>
-                  <div className="text-right">Activity</div>
+                  <div className="hidden text-right md:block">Assigned</div>
+                  <div className="hidden text-right md:block">Activity</div>
                   <div className="text-right">Available</div>
                 </div>
 
@@ -182,7 +187,7 @@ function FilterChips({
   };
 
   return (
-    <div className="mb-2 flex items-center gap-1.5">
+    <div className="scrollbar-none mb-2 flex flex-nowrap items-center gap-1.5 overflow-x-auto">
       {BUDGET_FILTER_KEYS.map((key) => (
         <FilterChip
           key={key}
@@ -285,7 +290,7 @@ function Header({
       : undefined;
 
   return (
-    <header className="flex items-center justify-between gap-6 border-b border-border px-4 py-3">
+    <header className="flex flex-col gap-2 border-b border-border px-4 py-3 md:flex-row md:items-center md:justify-between md:gap-6">
       <PeriodNav
         label={monthLabel(month)}
         prevHref={hasPrev ? monthHref(prevMonthKey(month), activeFilters) : null}
@@ -294,14 +299,14 @@ function Header({
         jumpLabel="Today"
         prevAriaLabel="Previous month"
         nextAriaLabel="Next month"
-        labelClassName="min-w-48 text-center text-xl font-semibold"
+        labelClassName="text-center text-lg font-semibold md:min-w-48 md:text-xl"
       />
 
-      <div className="text-right">
+      <div className="text-left md:text-right">
         <div className={cn("text-2xl font-semibold tabular-nums", rtaClass)} title={adjustmentHint}>
           {formatCurrency(readyToAssign, currency)}
         </div>
-        <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
+        <div className="flex items-center gap-1 text-xs text-muted-foreground md:justify-end">
           Ready to Assign
           {adjustmentHint != null && (
             <span title={adjustmentHint} aria-label={adjustmentHint} className="cursor-help text-muted-foreground/60">
@@ -353,10 +358,10 @@ function Group({
           <ChevronDown className="size-4 text-muted-foreground transition-transform group-[:not([open])]:-rotate-90" />
           {group.name}
         </div>
-        <div className="text-right text-xs text-muted-foreground tabular-nums">
+        <div className="hidden text-right text-xs text-muted-foreground tabular-nums md:block">
           {formatMoney(totals.assigned)}
         </div>
-        <div className="text-right text-xs text-muted-foreground tabular-nums">
+        <div className="hidden text-right text-xs text-muted-foreground tabular-nums md:block">
           {formatMoney(totals.activity)}
         </div>
         <div className="text-right text-xs text-muted-foreground tabular-nums">
@@ -395,9 +400,42 @@ function Row({
 }) {
   const underfunded = category.underfunded;
 
+  // Built once and rendered twice: inline in the desktop row, and inside the
+  // mobile row's bottom sheet. Same components, same props, one code path.
+  const goalControl = (
+    <GoalControl
+      month={month}
+      categoryId={category.id}
+      monthlyTarget={category.monthlyTarget}
+      targetType={category.targetType}
+      targetDate={category.targetDate}
+      available={category.available}
+      currency={currency}
+      goalMet={category.goal?.met ?? false}
+      underfunded={underfunded}
+      remaining={category.goal?.remaining ?? 0}
+      funded={category.goalFunded}
+      isCurrentMonth={isCurrentMonth}
+    />
+  );
+  const assignCell = <AssignCell month={month} categoryId={category.id} assigned={category.assigned} />;
+  const activityCell = (
+    <ActivityCell activity={category.activity} transactions={category.activityTransactions} />
+  );
+  const availablePill = (
+    <AvailablePill
+      month={month}
+      categoryId={category.id}
+      available={category.available}
+      groups={allGroups}
+    />
+  );
+  const avgHint =
+    category.avgSpend != null ? `ø ${currency} ${formatMoneyWhole(category.avgSpend)}` : undefined;
+
   return (
     <div className={cn(GRID, "px-2 py-0.5", underfunded && "bg-amber-50")}>
-      <div className="flex min-w-0 items-center justify-between gap-2 pr-2">
+      <div className="hidden min-w-0 items-center justify-between gap-2 pr-2 md:flex">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="truncate text-sm">{category.name}</span>
           {category.avgSpend != null && (
@@ -405,35 +443,27 @@ function Row({
               className="shrink-0 text-xs tabular-nums text-muted-foreground/50"
               title={`Average spent over the last 6 months: ${formatCurrency(category.avgSpend, currency)}`}
             >
-              ø {currency} {formatMoneyWhole(category.avgSpend)}
+              {avgHint}
             </span>
           )}
         </div>
-        <GoalControl
-          month={month}
-          categoryId={category.id}
-          monthlyTarget={category.monthlyTarget}
-          targetType={category.targetType}
-          targetDate={category.targetDate}
-          available={category.available}
-          currency={currency}
-          goalMet={category.goal?.met ?? false}
-          underfunded={underfunded}
-          remaining={category.goal?.remaining ?? 0}
-          funded={category.goalFunded}
-          isCurrentMonth={isCurrentMonth}
-        />
+        {goalControl}
       </div>
-      <AssignCell month={month} categoryId={category.id} assigned={category.assigned} />
-      <ActivityCell activity={category.activity} transactions={category.activityTransactions} />
-      <div className="flex justify-end pr-1">
-        <AvailablePill
-          month={month}
-          categoryId={category.id}
-          available={category.available}
-          groups={allGroups}
-        />
-      </div>
+
+      <BudgetRowSheet
+        name={category.name}
+        hint={avgHint}
+        underfunded={underfunded}
+        remaining={formatMoney(category.goal?.remaining ?? 0)}
+        assignCell={assignCell}
+        activityCell={activityCell}
+        availablePill={availablePill}
+        goalControl={goalControl}
+      />
+
+      <div className="hidden md:block">{assignCell}</div>
+      <div className="hidden md:block">{activityCell}</div>
+      <div className="flex justify-end pr-1">{availablePill}</div>
     </div>
   );
 }
