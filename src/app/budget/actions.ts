@@ -125,28 +125,59 @@ export async function fundToGoal(month: string, categoryId: number): Promise<voi
 }
 
 /**
- * Close a finished category (a trip, a one-off purchase): release its remaining
- * Available back to Ready to Assign (by decrementing this month's assignment by
- * the Available amount), clear its target, and hide it. No-op when Available is
- * negative — cover the overspend first. Only allowed from the current month:
- * hiding is global, so releasing a past month's Available could silently
- * overdraw a later month, and a future month would strand today's Available.
+ * Releases a category's remaining Available back to Ready to Assign (by
+ * decrementing this month's assignment by the Available amount). Returns
+ * `false` without writing anything when Available is negative — cover the
+ * overspend first. Shared by `closeCategory` and `hideCategoryFromMonth`,
+ * both of which only release money from the *current* month: releasing a past
+ * month's Available could silently overdraw a later month, and a future month
+ * would strand today's Available.
  */
-export async function closeCategory(month: string, categoryId: number): Promise<void> {
-  if (month !== currentMonth()) return;
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+function releaseAvailableToRta(tx: Tx, month: string, categoryId: number): boolean {
+  if (month !== currentMonth()) return true;
   const category = getBudgetView(month)
     .groups.flatMap((g) => g.categories)
     .find((c) => c.id === categoryId);
-  if (!category || category.available < 0) return;
-  const available = category.available;
+  if (!category || category.available < 0) return false;
+  if (category.available > 0) adjustAssignment(tx, month, categoryId, -category.available);
+  return true;
+}
+
+/**
+ * Close a finished category (a trip, a one-off purchase): release its remaining
+ * Available back to Ready to Assign, clear its target, and hide it from this
+ * month on. No-op when Available is negative — cover the overspend first.
+ * Only allowed from the current month (see `releaseAvailableToRta`).
+ */
+export async function closeCategory(month: string, categoryId: number): Promise<void> {
+  if (month !== currentMonth()) return;
 
   withUndoStep("Close category", () =>
     db.transaction((tx) => {
-      if (available > 0) adjustAssignment(tx, month, categoryId, -available);
+      if (!releaseAvailableToRta(tx, month, categoryId)) return;
       tx.update(schema.categories)
-        .set({ monthlyTarget: null, targetType: "monthly", targetDate: null, hidden: true })
+        .set({ monthlyTarget: null, targetType: "monthly", targetDate: null, hiddenFrom: month })
         .where(eq(schema.categories.id, categoryId))
         .run();
+    })
+  );
+  refresh();
+}
+
+/**
+ * Hide a category from `month` on via the budget row's context menu. From the
+ * current month this also releases its remaining Available back to Ready to
+ * Assign, same as `closeCategory` — but keeps the goal/target intact, since
+ * unlike closing, hiding isn't meant to say the category is finished. From
+ * any other viewed month it's a plain hide: no money moves.
+ */
+export async function hideCategoryFromMonth(month: string, categoryId: number): Promise<void> {
+  withUndoStep("Hide category", () =>
+    db.transaction((tx) => {
+      if (!releaseAvailableToRta(tx, month, categoryId)) return;
+      tx.update(schema.categories).set({ hiddenFrom: month }).where(eq(schema.categories.id, categoryId)).run();
     })
   );
   refresh();

@@ -46,7 +46,7 @@ CREATE TABLE categories (
   group_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   sort INTEGER NOT NULL DEFAULT 0,
-  hidden INTEGER NOT NULL DEFAULT 0,
+  hidden_from TEXT,
   monthly_target INTEGER,
   target_type TEXT NOT NULL DEFAULT 'monthly',
   target_date TEXT
@@ -118,15 +118,15 @@ function seed() {
       (40, 'Trips Europe', 4, 0),
       (60, 'Giftcards', 5, 0);
 
-    INSERT INTO categories (id, group_id, name, sort, hidden) VALUES
-      (${SALARY}, 5, 'Salary', 0, 0),
-      (${GROCERIES}, 10, 'Groceries', 0, 0),
-      (${RENT}, 10, 'Rent', 1, 0),
-      (${CC_PAYMENT}, 10, 'CC Payment', 2, 0),
-      (${ENTERTAINMENT}, 20, 'Entertainment', 0, 0),
-      (${TRIP_A}, 30, 'Trip', 0, 0),
-      (${TRIP_B}, 40, 'Trip', 0, 1),
-      (${GIFTCARDS}, 60, 'Giftcards', 0, 0);
+    INSERT INTO categories (id, group_id, name, sort, hidden_from) VALUES
+      (${SALARY}, 5, 'Salary', 0, NULL),
+      (${GROCERIES}, 10, 'Groceries', 0, NULL),
+      (${RENT}, 10, 'Rent', 1, NULL),
+      (${CC_PAYMENT}, 10, 'CC Payment', 2, NULL),
+      (${ENTERTAINMENT}, 20, 'Entertainment', 0, NULL),
+      (${TRIP_A}, 30, 'Trip', 0, NULL),
+      (${TRIP_B}, 40, 'Trip', 0, '0000-01'),
+      (${GIFTCARDS}, 60, 'Giftcards', 0, NULL);
 
     -- 2025-06: Trip B spend (hidden category, single day).
     INSERT INTO transactions (account_id, date, category_id, amount, payee) VALUES

@@ -37,7 +37,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { UndoButtons } from "@/components/undo-buttons";
-import { isAccountHiddenForMonth, monthFromPathname } from "@/lib/budget-math";
+import { isHiddenForMonth, monthFromPathname } from "@/lib/budget-math";
 import { formatMoney } from "@/lib/currency";
 import type { AccountBalance, SidebarData } from "@/lib/queries";
 import type { UndoState } from "@/lib/undo";
@@ -119,7 +119,7 @@ export function SidebarContent({
   // Accounts hidden for the viewed month are pulled out of their groups (but
   // stay in their group's subtotal — see AccountGroup) and collected here.
   const hidden = [...data.budget, ...data.giftcards, ...data.tracking].filter((a) =>
-    isAccountHiddenForMonth(a.hiddenFrom, viewedMonth)
+    isHiddenForMonth(a.hiddenFrom, viewedMonth)
   );
 
   function reorderSection(section: Section, nextAccounts: AccountBalance[]) {
@@ -297,8 +297,8 @@ function AccountGroup({
   // "Hidden" section instead). The subtotal deliberately still sums ALL of the
   // group's accounts — hiding is display-only and must not diverge from the
   // budget math, which counts hidden accounts' balances too.
-  const visible = accounts.filter((a) => !isAccountHiddenForMonth(a.hiddenFrom, viewedMonth));
-  const hidden = accounts.filter((a) => isAccountHiddenForMonth(a.hiddenFrom, viewedMonth));
+  const visible = accounts.filter((a) => !isHiddenForMonth(a.hiddenFrom, viewedMonth));
+  const hidden = accounts.filter((a) => isHiddenForMonth(a.hiddenFrom, viewedMonth));
 
   if (visible.length === 0) return null;
 
@@ -358,7 +358,7 @@ function AccountContextMenu({
   children: React.ReactNode;
 }) {
   const [, startTransition] = useTransition();
-  const hidden = isAccountHiddenForMonth(account.hiddenFrom, viewedMonth);
+  const hidden = isHiddenForMonth(account.hiddenFrom, viewedMonth);
 
   return (
     <ContextMenu>

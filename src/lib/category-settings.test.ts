@@ -17,7 +17,7 @@ import {
   reorderCategoryGroups,
   seedDefaultCategoriesIfEmpty,
   setCategoryGroupHidden,
-  setCategoryHidden,
+  setCategoryHiddenFrom,
 } from "./queries";
 
 /**
@@ -55,7 +55,7 @@ CREATE TABLE categories (
   group_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   sort INTEGER NOT NULL DEFAULT 0,
-  hidden INTEGER NOT NULL DEFAULT 0,
+  hidden_from TEXT,
   monthly_target INTEGER,
   target_type TEXT NOT NULL DEFAULT 'monthly',
   target_date TEXT
@@ -106,7 +106,7 @@ describe("seedDefaultCategoriesIfEmpty", () => {
       "Fun",
       "Home",
     ]);
-    expect(groups.every((g) => g.categories.every((c) => !c.hidden && !c.referenced))).toBe(true);
+    expect(groups.every((g) => g.categories.every((c) => c.hiddenFrom == null && !c.referenced))).toBe(true);
   });
 
   it("is a no-op once any category exists, even a user-created one", () => {
@@ -168,11 +168,11 @@ describe("category CRUD", () => {
     const groupId = createCategoryGroup(dbi, "Spending");
     const catId = createCategory(dbi, groupId, "  Groceries  ");
     renameCategory(dbi, catId, "Food");
-    setCategoryHidden(dbi, catId, true);
+    setCategoryHiddenFrom(dbi, catId, "2026-01");
 
     const category = listCategoryGroupsAdmin(dbi)[0].categories[0];
     expect(category.name).toBe("Food");
-    expect(category.hidden).toBe(true);
+    expect(category.hiddenFrom).toBe("2026-01");
   });
 
   it("deletes an unreferenced category outright", () => {

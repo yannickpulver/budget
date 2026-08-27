@@ -179,7 +179,7 @@ CREATE TABLE categories (
   group_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   sort INTEGER NOT NULL DEFAULT 0,
-  hidden INTEGER NOT NULL DEFAULT 0,
+  hidden_from TEXT,
   monthly_target INTEGER
 );
 CREATE TABLE transactions (
