@@ -28,6 +28,18 @@ interface RowState extends ImportPreviewRowDto {
   checked: boolean;
 }
 
+const STATUS_LABELS: Record<ImportPreviewRowDto["status"], string> = {
+  new: "New",
+  duplicate: "Duplicate",
+  revised: "Revised",
+};
+
+const STATUS_STYLES: Record<ImportPreviewRowDto["status"], string> = {
+  new: "bg-emerald-100 text-emerald-800",
+  duplicate: "bg-amber-100 text-amber-800",
+  revised: "bg-sky-100 text-sky-800",
+};
+
 /** Row state -> the shape the shared category/transfer picker speaks. */
 function selectionOf(row: RowState): CategorySelection {
   if (row.transferAccountId != null) {
@@ -48,7 +60,8 @@ function patchFor(selection: CategorySelection): Pick<RowState, "categoryId" | "
 /**
  * "Import CSV" flow for an account's register: upload — via the file picker or
  * by dropping a CSV anywhere on the account page — -> server-parsed preview
- * (NEW/DUPLICATE per row, toggleable) -> confirm inserts the checked rows.
+ * (NEW/DUPLICATE/REVISED per row, toggleable) -> confirm inserts the checked
+ * rows and updates the revised ones.
  * Payee and category/transfer are editable per row before confirming.
  * Parse errors block the whole file — nothing is inserted.
  */
@@ -112,7 +125,7 @@ export function ImportCsvDialog({
           setErrors(outcome.errors);
           return;
         }
-        setRows(outcome.rows.map((r) => ({ ...r, checked: !r.isDuplicate })));
+        setRows(outcome.rows.map((r) => ({ ...r, checked: r.status !== "duplicate" })));
         setBatchId(outcome.batchId);
       });
     },
@@ -183,6 +196,7 @@ export function ImportCsvDialog({
           categoryId: r.categoryId,
           importHash: r.importHash,
           transferAccountId: r.transferAccountId,
+          existingId: r.existingId,
         })),
         batchId
       );
@@ -196,6 +210,14 @@ export function ImportCsvDialog({
   }
 
   const checkedCount = rows?.filter((r) => r.checked).length ?? 0;
+  const checkedRevisionCount = rows?.filter((r) => r.checked && r.status === "revised").length ?? 0;
+  const checkedInsertCount = checkedCount - checkedRevisionCount;
+  const confirmLabel =
+    checkedRevisionCount === 0
+      ? `Import ${checkedCount} transaction${checkedCount === 1 ? "" : "s"}`
+      : checkedInsertCount === 0
+        ? `Update ${checkedRevisionCount} transaction${checkedRevisionCount === 1 ? "" : "s"}`
+        : `Import ${checkedInsertCount}, update ${checkedRevisionCount}`;
 
   return (
     <>
@@ -288,10 +310,10 @@ export function ImportCsvDialog({
                           <span
                             className={cn(
                               "rounded px-1.5 py-0.5 text-[10px] font-medium uppercase",
-                              r.isDuplicate ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"
+                              STATUS_STYLES[r.status]
                             )}
                           >
-                            {r.isDuplicate ? "Duplicate" : "New"}
+                            {STATUS_LABELS[r.status]}
                           </span>
                         </td>
                         <td className="px-2.5 py-1.5 tabular-nums whitespace-nowrap">{r.date}</td>
@@ -317,6 +339,11 @@ export function ImportCsvDialog({
                           {r.memo || "—"}
                         </td>
                         <td className="px-2.5 py-1.5 text-right tabular-nums whitespace-nowrap">
+                          {r.status === "revised" && r.existingAmount != null && (
+                            <span className="mr-1 text-muted-foreground line-through">
+                              {formatCurrency(r.existingAmount, currency)}
+                            </span>
+                          )}
                           {formatCurrency(r.amount, currency)}
                         </td>
                       </tr>
@@ -325,7 +352,8 @@ export function ImportCsvDialog({
                 </table>
               </div>
               <p className="text-xs text-muted-foreground">
-                {rows.length} row{rows.length === 1 ? "" : "s"} parsed, {checkedCount} selected to import.
+                {rows.length} row{rows.length === 1 ? "" : "s"} parsed, {checkedInsertCount} to import
+                {checkedRevisionCount > 0 && `, ${checkedRevisionCount} to update`}.
               </p>
               {formError && <p className="text-sm text-destructive">{formError}</p>}
             </div>
@@ -341,7 +369,7 @@ export function ImportCsvDialog({
             <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
             {rows && (
               <Button onClick={confirm} disabled={pending || checkedCount === 0}>
-                {pending ? "Importing…" : `Import ${checkedCount} transaction${checkedCount === 1 ? "" : "s"}`}
+                {pending ? "Importing…" : confirmLabel}
               </Button>
             )}
           </DialogFooter>
