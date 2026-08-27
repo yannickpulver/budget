@@ -62,7 +62,12 @@ export default async function AccountPage({
 
   return (
     <div className="flex flex-1 flex-col">
-      <AccountHeader detail={detail} />
+      <AccountHeader
+        detail={detail}
+        groups={groups}
+        transferTargets={transferTargets}
+        payeeSuggestions={payeeSuggestions}
+      />
 
       {holdingsView && <HoldingsSection accountId={id} view={holdingsView} />}
 

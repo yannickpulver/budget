@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/currency";
-import type { AccountDetail } from "@/lib/queries";
+import type { AccountDetail, CategoryGroupOption, TransferTarget } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import {
   closeAccountAction,
@@ -38,7 +38,17 @@ function balanceClass(value: number): string {
   return value < 0 ? "text-red-600" : "text-foreground";
 }
 
-export function AccountHeader({ detail }: { detail: AccountDetail }) {
+export function AccountHeader({
+  detail,
+  groups,
+  transferTargets,
+  payeeSuggestions,
+}: {
+  detail: AccountDetail;
+  groups: CategoryGroupOption[];
+  transferTargets: TransferTarget[];
+  payeeSuggestions: string[];
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -189,7 +199,13 @@ export function AccountHeader({ detail }: { detail: AccountDetail }) {
               <ImageDown className={cn("size-3.5", iconsPending && "animate-spin")} />
               Fetch payee icons
             </Button>
-            <ImportCsvDialog accountId={detail.id} currency={detail.currency} />
+            <ImportCsvDialog
+              accountId={detail.id}
+              currency={detail.currency}
+              groups={groups}
+              transferTargets={transferTargets}
+              payeeSuggestions={payeeSuggestions}
+            />
             {detail.type === "tracking" && (
               <ImportStatementDialog accountId={detail.id} currency={detail.currency} />
             )}
