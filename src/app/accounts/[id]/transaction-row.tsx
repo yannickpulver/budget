@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input";
 import { PayeeAvatar } from "@/components/payee-avatar";
 import { PayeeInput } from "@/components/payee-input";
 import type { AccountType } from "@/lib/budget-math";
-import { evaluateMoneyExpression, formatMoney } from "@/lib/currency";
 import type { AccountRef, CategoryGroupOption, RegisterRow, TransferTarget } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import {
@@ -14,56 +13,24 @@ import {
   convertToTransferAction,
   deleteTransactionAction,
   toggleClearedAction,
-  updateTransactionAction,
 } from "../actions";
 import { CategorySelect } from "./category-select";
 import { REGISTER_GRID } from "./grid";
+import {
+  amountToFields,
+  formatDateDisplay,
+  isUnchanged,
+  saveTransaction,
+  validateAmountAndDate,
+  type AmountFields,
+  type Committed,
+} from "./transaction-fields";
 
 /** Box metrics shared by every cell's text and editor state, so swapping between them never shifts the row. */
 const CELL_BOX = "h-7 rounded-md px-1.5";
 
 /** Look of a mounted editor: visible chrome, replaces the plain text for the duration of the edit. */
 const CELL_FIELD = cn(CELL_BOX, "border border-input shadow-none");
-
-/** "YYYY-MM-DD" -> "dd.mm.yyyy"; passes through anything that doesn't parse. */
-function formatDateDisplay(isoDate: string): string {
-  const parts = isoDate.split("-");
-  if (parts.length !== 3) return isoDate;
-  const [year, month, day] = parts;
-  return `${day}.${month}.${year}`;
-}
-
-interface AmountFields {
-  outflow: string;
-  inflow: string;
-}
-
-function amountToFields(amount: number): AmountFields {
-  if (amount < 0) return { outflow: formatMoney(-amount), inflow: "" };
-  if (amount > 0) return { outflow: "", inflow: formatMoney(amount) };
-  return { outflow: "", inflow: "" };
-}
-
-function fieldsToAmount(fields: AmountFields): number | null {
-  if (fields.outflow.trim() !== "") {
-    const parsed = evaluateMoneyExpression(fields.outflow);
-    return parsed == null ? null : -Math.abs(parsed);
-  }
-  if (fields.inflow.trim() !== "") {
-    const parsed = evaluateMoneyExpression(fields.inflow);
-    return parsed == null ? null : Math.abs(parsed);
-  }
-  return 0; // both empty — caller rejects 0 on commit
-}
-
-/** Snapshot of everything `updateTransactionAction` persists, used to detect no-op commits. */
-interface Committed {
-  date: string;
-  payee: string;
-  categoryId: number | null;
-  memo: string;
-  amount: number;
-}
 
 type FieldName = "date" | "payee" | "category" | "memo" | "outflow" | "inflow";
 
@@ -119,7 +86,7 @@ function EditableCell({
       )}
     >
       {isEmpty && placeholder ? (
-        <span className="min-w-0 truncate text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="min-w-0 truncate text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:opacity-100">
           {placeholder}
         </span>
       ) : (
@@ -261,41 +228,23 @@ export function TransactionRow({
    * `setCategoryId` hasn't re-rendered yet when `onValueChange` fires.
    */
   function commit(categoryOverride?: { categoryId: number | null }) {
-    const amount = fieldsToAmount(amountFields);
-    if (amount == null) {
-      setError("Amount is not a valid number.");
-      return;
-    }
-    if (amount === 0) {
-      setError("Enter an outflow or inflow amount.");
-      return;
-    }
-    if (!date) {
-      setError("Date is required.");
+    const validated = validateAmountAndDate(amountFields, date);
+    if (!validated.ok) {
+      setError(validated.error);
       return;
     }
 
     const rawCategoryId = categoryOverride ? categoryOverride.categoryId : categoryId;
     const nextCategoryId = isTransfer ? (linkedCategoryEditable ? rawCategoryId : null) : rawCategoryId;
-    const next: Committed = { date, payee, categoryId: nextCategoryId, memo, amount };
-    const prev = committed.current;
-    const unchanged =
-      next.date === prev.date &&
-      next.payee === prev.payee &&
-      next.categoryId === prev.categoryId &&
-      next.memo === prev.memo &&
-      next.amount === prev.amount;
-    if (unchanged) {
+    const next: Committed = { date, payee, categoryId: nextCategoryId, memo, amount: validated.amount };
+    if (isUnchanged(next, committed.current)) {
       setError(null);
       return;
     }
 
     setError(null);
     startTransition(async () => {
-      const result = await updateTransactionAction(row.id, accountId, row.transferAccountId, {
-        ...next,
-        cleared: row.cleared,
-      });
+      const result = await saveTransaction(row.id, accountId, row.transferAccountId, next, row.cleared);
       if (!result.ok) {
         setError(result.error);
         return;
@@ -375,7 +324,8 @@ export function TransactionRow({
     <div
       className={cn(
         REGISTER_GRID,
-        "group px-2 py-0.5 text-sm",
+        // Desktop only — MobileTransactionRow renders the same row below `md`.
+        "group hidden px-2 py-0.5 text-sm md:grid",
         isFuture && "bg-sky-50/60 text-muted-foreground",
         pending && "opacity-50"
       )}
@@ -495,7 +445,7 @@ export function TransactionRow({
         >
           <PayeeAvatar payee={payee} iconUrl={iconUrl} />
           {payee === "" ? (
-            <span className="min-w-0 truncate text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100">
+            <span className="min-w-0 truncate text-muted-foreground/60 opacity-0 transition-opacity group-hover:opacity-100 pointer-coarse:opacity-100">
               add payee
             </span>
           ) : (
@@ -643,7 +593,7 @@ export function TransactionRow({
           onClick={remove}
           disabled={pending}
           aria-label="Delete transaction"
-          className="flex justify-center text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+          className="flex justify-center text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100"
         >
           <Trash2 className="size-3.5" />
         </button>

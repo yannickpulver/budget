@@ -5,12 +5,11 @@ import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PayeeInput } from "@/components/payee-input";
-import { evaluateMoneyExpression } from "@/lib/currency";
 import type { CategoryGroupOption, TransferTarget } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { createTransactionAction, createTransferAction } from "../actions";
 import { CategoryTransferSelect, type CategorySelection } from "./category-transfer-select";
 import { REGISTER_GRID } from "./grid";
+import { createTransaction, validateAmountAndDate } from "./transaction-fields";
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -53,54 +52,23 @@ export function AddTransactionRow({
   }
 
   function save() {
-    if (!date) {
-      setError("Date is required.");
-      return;
-    }
-    let amount: number | null = null;
-    if (outflow.trim() !== "") {
-      const parsed = evaluateMoneyExpression(outflow);
-      amount = parsed == null ? null : -Math.abs(parsed);
-    } else if (inflow.trim() !== "") {
-      const parsed = evaluateMoneyExpression(inflow);
-      amount = parsed == null ? null : Math.abs(parsed);
-    }
-    if (amount == null || amount === 0) {
-      setError("Enter an outflow or inflow amount.");
-      return;
-    }
-    const needsLinkedCategory =
-      selection.kind === "transfer" &&
-      transferTargets.find((a) => a.id === selection.accountId)?.type === "tracking" &&
-      selection.categoryId == null;
-    if (needsLinkedCategory) {
-      setError("Choose a budget category for this transfer.");
+    const validated = validateAmountAndDate({ outflow, inflow }, date);
+    if (!validated.ok) {
+      setError(validated.error);
       return;
     }
 
     setError(null);
     startTransition(async () => {
-      const result =
-        selection.kind === "transfer"
-          ? await createTransferAction({
-              fromAccountId: accountId,
-              toAccountId: selection.accountId,
-              date,
-              amount,
-              memo,
-              cleared: true,
-              categoryId: selection.categoryId,
-            })
-          : await createTransactionAction({
-              accountId,
-              date,
-              payee,
-              memo,
-              cleared: true,
-              amount,
-              categoryId: selection.kind === "category" ? selection.categoryId : null,
-            });
-
+      const result = await createTransaction({
+        accountId,
+        date,
+        payee,
+        memo,
+        amount: validated.amount,
+        selection,
+        transferTargets,
+      });
       if (!result.ok) {
         setError(result.error);
         return;
