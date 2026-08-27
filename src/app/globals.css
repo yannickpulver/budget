@@ -105,3 +105,33 @@
     display: none;
   }
 }
+
+/* Room for the notch / home bar on chrome that sits against a screen edge
+   (the mobile top bar, bottom sheets, the floating add button). `viewportFit:
+   "cover"` in the root layout is what makes these env() values non-zero. */
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Charts draw into a fixed 600-unit viewBox scaled to their container, so on a
+   phone every label shrinks with it (10.5 units ≈ 7px at 390px wide). Below
+   480px the x-axis labels get bumped back up and every second one is dropped,
+   so the axis stays readable instead of turning into overlapping grey mush.
+   Y-axis ticks are deliberately left alone: they live in a 44-unit gutter and
+   a bigger font would clip them. */
+@media (max-width: 479px) {
+  .chart-tick {
+    font-size: 16px;
+  }
+  /* The end-of-line value callout scales up too, but stays a step above the
+     axis ticks — it's the one number the chart is actually calling out. */
+  .chart-callout {
+    font-size: 18px;
+  }
+  .chart-x-tick-alt {
+    display: none;
+  }
+}

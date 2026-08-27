@@ -60,7 +60,7 @@ export function HoldingsSection({ accountId, view }: { accountId: number; view: 
 
   return (
     <div className="border-b border-border px-4 py-3">
-      <div className="mb-2 flex items-center justify-between gap-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <h2 className="text-sm font-semibold">Holdings</h2>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>Prices updated {formatUpdatedAt(view.oldestFetchedAt)}</span>
@@ -73,11 +73,11 @@ export function HoldingsSection({ accountId, view }: { accountId: number; view: 
 
       <div className={cn(HOLDINGS_GRID, "px-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase")}>
         <div>Symbol</div>
-        <div>Name</div>
-        <div className="text-right">Quantity</div>
-        <div className="text-right">Price</div>
+        <div className="hidden md:block">Name</div>
+        <div className="hidden text-right md:block">Quantity</div>
+        <div className="hidden text-right md:block">Price</div>
         <div className="text-right">Value</div>
-        <div />
+        <div className="hidden md:block" />
       </div>
 
       <div className="rounded-lg border border-border">
@@ -85,8 +85,12 @@ export function HoldingsSection({ accountId, view }: { accountId: number; view: 
           <AddHoldingRow accountId={accountId} />
         </div>
         <div className="divide-y divide-border/60">
+          {/* One wrapper per holding: HoldingRow renders a desktop row and a
+              mobile row, and `divide-y` would otherwise rule between them. */}
           {view.holdings.map((holding) => (
-            <HoldingRow key={holding.id} holding={holding} accountId={accountId} />
+            <div key={holding.id}>
+              <HoldingRow holding={holding} accountId={accountId} />
+            </div>
           ))}
           {view.holdings.length === 0 && (
             <div className="p-6 text-center text-sm text-muted-foreground">No holdings yet.</div>
@@ -95,8 +99,8 @@ export function HoldingsSection({ accountId, view }: { accountId: number; view: 
       </div>
 
       {view.holdings.length > 0 && (
-        <div className="mt-2 flex items-center justify-between rounded-md bg-muted/40 px-3 py-2 text-sm">
-          <div className="flex items-center gap-4">
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-md bg-muted/40 px-3 py-2 text-sm">
+          <div className="flex flex-wrap items-center gap-x-4">
             <span>
               Portfolio value: <span className="font-medium tabular-nums">{formatMoney(view.totalValueRappen)}</span>
             </span>

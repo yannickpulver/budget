@@ -5,6 +5,7 @@ import {
   DndContext,
   KeyboardSensor,
   PointerSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -64,7 +65,32 @@ function balanceClass(value: number): string {
 
 type Section = "budget" | "giftcards" | "tracking";
 
-export function Sidebar({ data: initialData, undo }: { data: SidebarData; undo: UndoState }) {
+/**
+ * Desktop sidebar shell. Below `md` it's gone entirely — the same
+ * {@link SidebarContent} renders inside the mobile top bar's slide-in sheet.
+ */
+export function Sidebar({ data, undo }: { data: SidebarData; undo: UndoState }) {
+  return (
+    // Sticky + h-screen so the sidebar stays put while the main list scrolls;
+    // the nav inside is the scroll container for long account lists.
+    <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-border bg-sidebar md:flex">
+      <SidebarContent data={data} undo={undo} />
+    </aside>
+  );
+}
+
+/**
+ * Everything inside the sidebar: nav links, the reorderable account groups and
+ * the net-worth footer. A fragment, so its parent (the `<aside>` on desktop, a
+ * sheet panel on mobile) owns the column layout.
+ */
+export function SidebarContent({
+  data: initialData,
+  undo,
+}: {
+  data: SidebarData;
+  undo: UndoState;
+}) {
   const pathname = usePathname();
   // The sidebar mirrors the month the user is viewing on the budget page so
   // "hidden from <month> on" takes effect exactly there; anywhere else we fall
@@ -104,9 +130,7 @@ export function Sidebar({ data: initialData, undo }: { data: SidebarData; undo: 
   }
 
   return (
-    // Sticky + h-screen so the sidebar stays put while the main list scrolls;
-    // the nav below is the scroll container for long account lists.
-    <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col border-r border-border bg-sidebar">
+    <>
       <div className="flex items-center justify-between px-4 py-4">
         <span className="text-sm font-semibold tracking-tight">budget</span>
         <UndoButtons state={undo} />
@@ -220,7 +244,7 @@ export function Sidebar({ data: initialData, undo }: { data: SidebarData; undo: 
           </span>
         </div>
       </div>
-    </aside>
+    </>
   );
 }
 
@@ -263,6 +287,9 @@ function AccountGroup({
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    // Touch needs hold-to-drag, or every attempt to scroll the account list
+    // would start a reorder instead.
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
@@ -389,7 +416,7 @@ function SortableAccountRow({
           type="button"
           {...attributes}
           {...listeners}
-          className="flex size-4 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground active:cursor-grabbing"
+          className="flex size-4 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground active:cursor-grabbing pointer-coarse:opacity-100"
           aria-label={`Drag to reorder ${account.name}`}
         >
           <GripVertical className="size-3" />

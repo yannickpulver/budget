@@ -21,10 +21,11 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * Undo/redo toolbar. State comes from the server (refreshed on every mutation
- * via revalidatePath("/", "layout")); the global shortcuts mirror the buttons.
+ * Shared undo/redo plumbing. The state comes from the server (refreshed on
+ * every mutation via revalidatePath("/", "layout")); `router.refresh()` pulls
+ * the new state in after the action runs.
  */
-export function UndoButtons({ state }: { state: UndoState }) {
+function useUndoRedo(state: UndoState) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
@@ -44,6 +45,18 @@ export function UndoButtons({ state }: { state: UndoState }) {
     });
   }, [state.canRedo, router]);
 
+  return { pending, runUndo, runRedo };
+}
+
+/**
+ * The global ⌘Z / ⌘⇧Z shortcuts, mounted exactly once from the root layout.
+ * Deliberately separate from {@link UndoButtons}: the buttons render in both
+ * the desktop sidebar and the mobile top bar, and binding the shortcut per
+ * button instance would run every undo two or three times.
+ */
+export function UndoShortcuts({ state }: { state: UndoState }) {
+  const { runUndo, runRedo } = useUndoRedo(state);
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey)) return;
@@ -61,6 +74,13 @@ export function UndoButtons({ state }: { state: UndoState }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [runUndo, runRedo]);
+
+  return null;
+}
+
+/** Undo/redo toolbar. Safe to render more than once — see {@link UndoShortcuts}. */
+export function UndoButtons({ state }: { state: UndoState }) {
+  const { pending, runUndo, runRedo } = useUndoRedo(state);
 
   return (
     <div className="flex items-center gap-0.5">

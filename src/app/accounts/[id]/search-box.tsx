@@ -25,7 +25,7 @@ export function SearchBox() {
   }, [value]);
 
   return (
-    <div className="relative w-64">
+    <div className="relative min-w-0 flex-1 md:w-64 md:flex-none">
       <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
       <Input
         value={value}
