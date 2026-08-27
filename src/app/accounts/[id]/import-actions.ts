@@ -48,15 +48,21 @@ export interface ImportRowInput {
   categoryId: number | null;
   importHash: string;
   transferAccountId?: number | null;
+  /**
+   * Set when the preview matched this row to an existing transaction the bank
+   * restated: commit updates that row's amount instead of inserting.
+   */
+  existingId?: number | null;
 }
 
 export type ConfirmImportResult = { ok: true; count: number } | { ok: false; error: string };
 
 /**
- * Insert the rows the user kept checked in the preview. `batchId` comes from
- * the preceding `previewImportAction` call — passing the same batchId twice
- * (e.g. a client retry after a dropped response) commits once and returns
- * the original count both times.
+ * Commit the rows the user kept checked in the preview: rows carrying an
+ * `existingId` update that transaction's amount, the rest insert. `batchId`
+ * comes from the preceding `previewImportAction` call — passing the same
+ * batchId twice (e.g. a client retry after a dropped response) commits once
+ * and returns the original count both times.
  */
 export async function confirmImportAction(
   accountId: number,
@@ -64,9 +70,17 @@ export async function confirmImportAction(
   batchId: string
 ): Promise<ConfirmImportResult> {
   if (rows.length === 0) return { ok: false, error: "No rows selected." };
-  const count = withUndoStep(`Import ${rows.length} transactions`, () =>
-    commitImport(db, accountId, rows, batchId)
-  );
+  const inserts = rows.filter((r) => r.existingId == null);
+  const revisions = rows
+    .filter((r) => r.existingId != null)
+    .map((r) => ({ id: r.existingId!, amount: r.amount, importHash: r.importHash }));
+  const label =
+    revisions.length === 0
+      ? `Import ${inserts.length} transactions`
+      : inserts.length === 0
+        ? `Update ${revisions.length} transactions`
+        : `Import ${inserts.length} transactions, update ${revisions.length}`;
+  const count = withUndoStep(label, () => commitImport(db, accountId, inserts, batchId, revisions));
   refresh(accountId);
   return { ok: true, count };
 }

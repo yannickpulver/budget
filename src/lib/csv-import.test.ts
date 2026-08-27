@@ -250,8 +250,8 @@ describe("buildImportPreview", () => {
 
     const preview = buildImportPreview(dbi, CHECKING, csv.rows);
     expect(preview).toHaveLength(2);
-    expect(preview[0]).toMatchObject({ categoryId: GROCERIES, categoryName: "Groceries", isDuplicate: false });
-    expect(preview[1]).toMatchObject({ categoryId: null, categoryName: "Ready to Assign", isDuplicate: false });
+    expect(preview[0]).toMatchObject({ categoryId: GROCERIES, categoryName: "Groceries", status: "new" });
+    expect(preview[1]).toMatchObject({ categoryId: null, categoryName: "Ready to Assign", status: "new" });
   });
 
   it("leaves an unmatched category name uncategorized (categoryId null) but shows it for display", () => {
@@ -275,7 +275,7 @@ describe("buildImportPreview", () => {
     if (!csv.ok) throw new Error("expected parse to succeed");
 
     const preview = buildImportPreview(dbi, CHECKING, csv.rows);
-    expect(preview[0].isDuplicate).toBe(true);
+    expect(preview[0].status).toBe("duplicate");
   });
 
   it("flags a row as duplicate by import_hash even if the existing row's fields were later edited", () => {
@@ -288,7 +288,7 @@ describe("buildImportPreview", () => {
     if (!csv.ok) throw new Error("expected parse to succeed");
 
     const preview = buildImportPreview(dbi, CHECKING, csv.rows);
-    expect(preview[0].isDuplicate).toBe(true);
+    expect(preview[0].status).toBe("duplicate");
   });
 
   it("does not flag a matching transaction in a different account", () => {
@@ -300,7 +300,7 @@ describe("buildImportPreview", () => {
     if (!csv.ok) throw new Error("expected parse to succeed");
 
     const preview = buildImportPreview(dbi, CHECKING, csv.rows);
-    expect(preview[0].isDuplicate).toBe(false);
+    expect(preview[0].status).toBe("new");
   });
 
   it("flags the second of two identical rows within the same file as a duplicate too", () => {
@@ -313,16 +313,209 @@ describe("buildImportPreview", () => {
     if (!csv.ok) throw new Error("expected parse to succeed");
 
     const preview = buildImportPreview(dbi, CHECKING, csv.rows);
-    expect(preview[0].isDuplicate).toBe(false);
-    expect(preview[1].isDuplicate).toBe(true);
+    expect(preview[0].status).toBe("new");
+    expect(preview[1].status).toBe("duplicate");
   });
 
-  it("defaults new rows checked and duplicate rows unchecked is a UI concern — preview only reports isDuplicate", () => {
+  it("defaults new rows checked and duplicate rows unchecked is a UI concern — preview only reports status", () => {
     const dbi = makeDb();
     const csv = parseImportCsv(Buffer.from("Date,Payee,Memo,Outflow,Inflow\n15.03.2025,Coop,,CHF 42.50,\n"));
     if (!csv.ok) throw new Error("expected parse to succeed");
     const preview = buildImportPreview(dbi, CHECKING, csv.rows);
-    expect(preview[0].isDuplicate).toBe(false);
+    expect(preview[0].status).toBe("new");
+  });
+});
+
+describe("buildImportPreview — revised amounts", () => {
+  /** Book one transaction and preview the same date/payee at `csvAmount` (in CHF). */
+  function previewAgainst(existingRappen: number, csvOutflow: string, payee = "Auto Europe") {
+    const dbi = makeDb();
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES (${CHECKING}, '2026-08-02', '${payee}', ${existingRappen}, 1)`
+    );
+    const csv = parseImportCsv(
+      Buffer.from(`Date,Payee,Memo,Outflow,Inflow\n02.08.2026,${payee},,CHF ${csvOutflow},\n`)
+    );
+    if (!csv.ok) throw new Error("expected parse to succeed");
+    return buildImportPreview(dbi, CHECKING, csv.rows);
+  }
+
+  it("flags a rappen-level restatement as revised and points at the existing row", () => {
+    const preview = previewAgainst(-32732, "327.30");
+    expect(preview[0].status).toBe("revised");
+    expect(preview[0].existingAmount).toBe(-32732);
+    expect(preview[0].existingId).toBeGreaterThan(0);
+  });
+
+  it("revises a small amount when the drift is under 1% of it", () => {
+    // 3.38 -> 3.40 is 0.6%, the shape of a restated foreign subscription.
+    expect(previewAgainst(-338, "3.40")[0].status).toBe("revised");
+  });
+
+  it("leaves a drift above the 1% share as a new row", () => {
+    // 1.90 -> 1.95 is 2.6%: far likelier a second purchase than a restatement.
+    const preview = previewAgainst(-190, "1.95");
+    expect(preview[0].status).toBe("new");
+    expect(preview[0].existingId).toBeNull();
+  });
+
+  it("leaves a drift above the CHF 1.00 ceiling as a new row", () => {
+    // 0.75% of 200.00, but 1.50 in absolute terms.
+    expect(previewAgainst(-20000, "201.50")[0].status).toBe("new");
+  });
+
+  it("does not revise across a sign flip", () => {
+    const dbi = makeDb();
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES (${CHECKING}, '2026-08-02', 'Fust', 100, 1)`
+    );
+    const csv = parseImportCsv(Buffer.from("Date,Payee,Memo,Outflow,Inflow\n02.08.2026,Fust,,CHF 1.00,\n"));
+    if (!csv.ok) throw new Error("expected parse to succeed");
+    expect(buildImportPreview(dbi, CHECKING, csv.rows)[0].status).toBe("new");
+  });
+
+  it("stays out of it when two same-day charges from one merchant both fit", () => {
+    const dbi = makeDb();
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES
+         (${CHECKING}, '2026-08-20', 'Felfel', -1290, 1),
+         (${CHECKING}, '2026-08-20', 'Felfel', -1291, 1)`
+    );
+    const csv = parseImportCsv(Buffer.from("Date,Payee,Memo,Outflow,Inflow\n20.08.2026,Felfel,,CHF 12.92,\n"));
+    if (!csv.ok) throw new Error("expected parse to succeed");
+    expect(buildImportPreview(dbi, CHECKING, csv.rows)[0].status).toBe("new");
+  });
+
+  it("lets two CSV rows revise two different transactions, never the same one twice", () => {
+    const dbi = makeDb();
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES
+         (${CHECKING}, '2026-08-01', 'Patreon', -338, 1),
+         (${CHECKING}, '2026-08-01', 'Google Cloud', -333, 1)`
+    );
+    const csv = parseImportCsv(
+      Buffer.from(
+        "Date,Payee,Memo,Outflow,Inflow\n01.08.2026,Patreon,,CHF 3.40,\n01.08.2026,Google Cloud,,CHF 3.35,\n"
+      )
+    );
+    if (!csv.ok) throw new Error("expected parse to succeed");
+    const preview = buildImportPreview(dbi, CHECKING, csv.rows);
+    expect(preview.map((r) => r.status)).toEqual(["revised", "revised"]);
+    expect(preview[0].existingId).not.toBe(preview[1].existingId);
+  });
+
+  it("prefers duplicate over revised when the amount matches exactly", () => {
+    expect(previewAgainst(-32732, "327.32")[0].status).toBe("duplicate");
+  });
+
+  it("does not offer a transaction an exact-duplicate row already matched", () => {
+    const dbi = makeDb();
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES (${CHECKING}, '2026-08-20', 'Felfel', -1290, 1)`
+    );
+    // The booked -12.90 is spent by the first row, leaving nothing for -12.91
+    // to revise: the second charge is real and must import on its own.
+    const csv = parseImportCsv(
+      Buffer.from(
+        "Date,Payee,Memo,Outflow,Inflow\n20.08.2026,Felfel,,CHF 12.90,\n20.08.2026,Felfel,,CHF 12.91,\n"
+      )
+    );
+    if (!csv.ok) throw new Error("expected parse to succeed");
+    const preview = buildImportPreview(dbi, CHECKING, csv.rows);
+    expect(preview.map((r) => r.status)).toEqual(["duplicate", "new"]);
+  });
+
+  it("does not reach into another account", () => {
+    const dbi = makeDb();
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES (${SAVINGS}, '2026-08-02', 'Auto Europe', -32732, 1)`
+    );
+    const csv = parseImportCsv(
+      Buffer.from("Date,Payee,Memo,Outflow,Inflow\n02.08.2026,Auto Europe,,CHF 327.30,\n")
+    );
+    if (!csv.ok) throw new Error("expected parse to succeed");
+    expect(buildImportPreview(dbi, CHECKING, csv.rows)[0].status).toBe("new");
+  });
+});
+
+describe("commitImport — revisions", () => {
+  it("updates the amount and import_hash in place instead of inserting", () => {
+    const dbi = makeDb();
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES (${CHECKING}, '2026-08-02', 'Auto Europe', -32732, 1)`
+    );
+    const id = (sqlite.prepare("SELECT id FROM transactions").get() as { id: number }).id;
+    const hash = computeImportHash(CHECKING, "2026-08-02", -32730, "Auto Europe");
+
+    const count = commitImport(dbi, CHECKING, [], "batch-rev", [{ id, amount: -32730, importHash: hash }]);
+
+    expect(count).toBe(1);
+    const rows = sqlite.prepare("SELECT id, amount, import_hash FROM transactions").all();
+    expect(rows).toEqual([{ id, amount: -32730, import_hash: hash }]);
+  });
+
+  it("mirrors the new amount onto the other leg of a transfer", () => {
+    const dbi = makeDb();
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared, transfer_account_id, transfer_pair_id) VALUES
+         (${CHECKING}, '2026-08-02', 'Transfer', -5000, 1, ${SAVINGS}, 'pair-1'),
+         (${SAVINGS}, '2026-08-02', 'Transfer', 5000, 1, ${CHECKING}, 'pair-1')`
+    );
+    const id = (
+      sqlite.prepare(`SELECT id FROM transactions WHERE account_id = ${CHECKING}`).get() as { id: number }
+    ).id;
+
+    commitImport(dbi, CHECKING, [], "batch-rev-transfer", [
+      { id, amount: -5010, importHash: computeImportHash(CHECKING, "2026-08-02", -5010, "Transfer") },
+    ]);
+
+    const amounts = (
+      sqlite.prepare("SELECT account_id, amount FROM transactions ORDER BY account_id").all() as Array<{
+        account_id: number;
+        amount: number;
+      }>
+    ).map((r) => [r.account_id, r.amount]);
+    expect(amounts).toEqual([
+      [CHECKING, -5010],
+      [SAVINGS, 5010],
+    ]);
+  });
+
+  it("counts revisions alongside inserts and stays idempotent per batch", () => {
+    const dbi = makeDb();
+    sqlite.exec(
+      `INSERT INTO transactions (account_id, date, payee, amount, cleared) VALUES (${CHECKING}, '2026-08-02', 'Auto Europe', -32732, 1)`
+    );
+    const id = (sqlite.prepare("SELECT id FROM transactions").get() as { id: number }).id;
+    const args = [
+      dbi,
+      CHECKING,
+      [
+        {
+          date: "2026-08-03",
+          payee: "SBB",
+          memo: "",
+          amount: -80000,
+          categoryId: null,
+          importHash: computeImportHash(CHECKING, "2026-08-03", -80000, "SBB"),
+        },
+      ],
+      "batch-mixed",
+      [{ id, amount: -32730, importHash: computeImportHash(CHECKING, "2026-08-02", -32730, "Auto Europe") }],
+    ] satisfies Parameters<typeof commitImport>;
+
+    expect(commitImport(...args)).toBe(2);
+    expect(commitImport(...args)).toBe(2); // replay: no second insert, no second update
+    expect(sqlite.prepare("SELECT COUNT(*) c FROM transactions").get()).toEqual({ c: 2 });
+  });
+
+  it("skips a target deleted between preview and confirm", () => {
+    const dbi = makeDb();
+    const count = commitImport(dbi, CHECKING, [], "batch-gone", [
+      { id: 9999, amount: -100, importHash: "stale" },
+    ]);
+    expect(count).toBe(1);
+    expect(sqlite.prepare("SELECT COUNT(*) c FROM transactions").get()).toEqual({ c: 0 });
   });
 });
 
@@ -436,7 +629,7 @@ describe("commitImport", () => {
     const preview = buildImportPreview(dbi, CHECKING, csv.rows);
 
     // Simulate the UI default: new rows checked, duplicates unchecked.
-    const checked = preview.filter((r) => !r.isDuplicate);
+    const checked = preview.filter((r) => r.status !== "duplicate");
     const inserted = commitImport(
       dbi,
       CHECKING,
@@ -534,7 +727,7 @@ describe("importing transfers", () => {
       Buffer.from("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca Card Services,,CHF 100.00,,Savings\n")
     );
     if (!parsed.ok) throw new Error("expected parse to succeed");
-    expect(buildImportPreview(dbi, CHECKING, parsed.rows)[0].isDuplicate).toBe(true);
+    expect(buildImportPreview(dbi, CHECKING, parsed.rows)[0].status).toBe("duplicate");
   });
 
   it("applies a category only to the on-budget leg when the other side is tracking", () => {
