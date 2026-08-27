@@ -1735,12 +1735,55 @@ export interface ImportPreviewRow {
   categoryId: number | null;
   /** Display name — matched category, "Ready to Assign", raw unmatched name, or null. */
   categoryName: string | null;
-  isDuplicate: boolean;
+  /**
+   * `"duplicate"` — already in the account. `"revised"` — the same transaction
+   * at a slightly different amount, restated by the bank after the export was
+   * taken; committing it updates the existing row in place.
+   */
+  status: "new" | "duplicate" | "revised";
+  /** The transaction this row revises, set only when `status` is `"revised"`. */
+  existingId: number | null;
+  /** That transaction's current amount, for showing the delta. */
+  existingAmount: number | null;
   importHash: string;
   /** Counterpart account for a transfer row, or null for an ordinary transaction. */
   transferAccountId: number | null;
   /** Counterpart account's name, for display. */
   transferAccountName: string | null;
+}
+
+/**
+ * How far an amount may move and still count as the same transaction: 1% of the
+ * booked amount, capped at CHF 1.00. Card issuers restate foreign-currency rows
+ * by a rappen or two once the final exchange rate settles, days after the
+ * statement was exported. That is tiny against a CHF 327 car rental but a much
+ * larger share of a CHF 3.38 subscription, so the limit is proportional with an
+ * absolute ceiling.
+ */
+const REVISION_MAX_RAPPEN = 100;
+const REVISION_MAX_FRACTION = 0.01;
+
+interface RevisionCandidate {
+  id: number;
+  amount: number;
+}
+
+/**
+ * The one existing transaction that `amount` revises, or null.
+ *
+ * Requires a single candidate within tolerance: with two same-day charges from
+ * one merchant there is no way to tell which the bank restated, and guessing
+ * would overwrite a real transaction. Ambiguity resolves to null, so the row
+ * imports as new and the user sees both.
+ */
+function findRevisionTarget(candidates: RevisionCandidate[], amount: number): RevisionCandidate | null {
+  const withinTolerance = candidates.filter((c) => {
+    if (Math.sign(c.amount) !== Math.sign(amount)) return false;
+    const diff = Math.abs(amount - c.amount);
+    if (diff === 0) return false; // an exact match is a duplicate, handled by the triple
+    return diff <= Math.min(REVISION_MAX_RAPPEN, Math.abs(c.amount) * REVISION_MAX_FRACTION);
+  });
+  return withinTolerance.length === 1 ? withinTolerance[0] : null;
 }
 
 /** Transfer rows are stored with this payee, matching `createTransfer`. */
@@ -1816,6 +1859,7 @@ export function buildImportPreview(dbi: DB, accountId: number, rows: ParsedImpor
 
   const existing = dbi
     .select({
+      id: schema.transactions.id,
       date: schema.transactions.date,
       amount: schema.transactions.amount,
       payee: schema.transactions.payee,
@@ -1827,6 +1871,17 @@ export function buildImportPreview(dbi: DB, accountId: number, rows: ParsedImpor
   const existingHashes = new Set(existing.map((t) => t.importHash).filter((h): h is string => h != null));
   const existingTriples = new Set(existing.map((t) => `${t.date}|${t.amount}|${t.payee}`));
   const seenInBatch = new Set<string>();
+
+  // Candidates for an amount revision, grouped by the part that must match
+  // exactly. Rows are dropped from their group once claimed, so two CSV rows
+  // can't both revise the same transaction.
+  const candidatesByDatePayee = new Map<string, RevisionCandidate[]>();
+  for (const t of existing) {
+    const key = `${t.date}|${t.payee}`;
+    const group = candidatesByDatePayee.get(key);
+    if (group) group.push({ id: t.id, amount: t.amount });
+    else candidatesByDatePayee.set(key, [{ id: t.id, amount: t.amount }]);
+  }
 
   const accountsById = new Map(
     dbi
@@ -1855,6 +1910,26 @@ export function buildImportPreview(dbi: DB, accountId: number, rows: ParsedImpor
     const isDuplicate = existingHashes.has(importHash) || existingTriples.has(triple) || seenInBatch.has(triple);
     seenInBatch.add(triple);
 
+    const key = `${row.date}|${payee}`;
+    const group = candidatesByDatePayee.get(key) ?? [];
+    let status: ImportPreviewRow["status"] = isDuplicate ? "duplicate" : "new";
+    let revision: RevisionCandidate | null = null;
+    if (isDuplicate) {
+      // Spend the transaction this row already matches, so a later row in the
+      // same file can't "revise" (and overwrite) it.
+      const claimed = group.findIndex((c) => c.amount === row.amount);
+      if (claimed !== -1) candidatesByDatePayee.set(key, group.toSpliced(claimed, 1));
+    } else {
+      revision = findRevisionTarget(group, row.amount);
+      if (revision != null) {
+        status = "revised";
+        candidatesByDatePayee.set(
+          key,
+          group.filter((c) => c.id !== revision!.id)
+        );
+      }
+    }
+
     const categoryName = categoryId != null ? categoryNameById.get(categoryId)! : resolved.name;
 
     return {
@@ -1865,7 +1940,9 @@ export function buildImportPreview(dbi: DB, accountId: number, rows: ParsedImpor
       amount: row.amount,
       categoryId,
       categoryName,
-      isDuplicate,
+      status,
+      existingId: revision?.id ?? null,
+      existingAmount: revision?.amount ?? null,
       importHash,
       transferAccountId,
       transferAccountName: transferAccountId != null ? (accountsById.get(transferAccountId) ?? null) : null,
@@ -1882,6 +1959,13 @@ export interface ImportInsertRow {
   importHash: string;
   /** Counterpart account: when set, the row commits as a paired transfer instead of a plain transaction. */
   transferAccountId?: number | null;
+}
+
+/** An existing transaction whose amount the bank restated after the export. */
+export interface ImportRevisionRow {
+  id: number;
+  amount: number;
+  importHash: string;
 }
 
 /**
@@ -1901,8 +1985,18 @@ export interface ImportInsertRow {
  * keyed to this account, date, amount and payee, and the mirrored leg has the
  * opposite amount. The returned count is the number of CSV rows, not of
  * inserted transactions.
+ *
+ * `revisions` are rows the preview matched to an existing transaction at a
+ * slightly different amount: those update in place instead of inserting, and
+ * count toward the return value like any other row.
  */
-export function commitImport(dbi: DB, accountId: number, rows: ImportInsertRow[], batchId: string): number {
+export function commitImport(
+  dbi: DB,
+  accountId: number,
+  rows: ImportInsertRow[],
+  batchId: string,
+  revisions: ImportRevisionRow[] = []
+): number {
   return dbi.transaction((tx) => {
     const existing = tx
       .select({ count: schema.importBatches.count })
@@ -1961,11 +2055,39 @@ export function commitImport(dbi: DB, accountId: number, rows: ImportInsertRow[]
       tx.insert(schema.transactions).values(values).run();
     }
 
+    for (const r of revisions) {
+      const target = tx
+        .select({ transferPairId: schema.transactions.transferPairId })
+        .from(schema.transactions)
+        .where(eq(schema.transactions.id, r.id))
+        .get();
+      if (!target) continue; // deleted between preview and confirm
+
+      tx.update(schema.transactions)
+        .set({ amount: r.amount, importHash: r.importHash })
+        .where(eq(schema.transactions.id, r.id))
+        .run();
+
+      // A transfer's two legs must stay mirrored, or both accounts drift.
+      if (target.transferPairId != null) {
+        tx.update(schema.transactions)
+          .set({ amount: -r.amount })
+          .where(
+            and(
+              eq(schema.transactions.transferPairId, target.transferPairId),
+              ne(schema.transactions.id, r.id)
+            )
+          )
+          .run();
+      }
+    }
+
+    const count = rows.length + revisions.length;
     tx.insert(schema.importBatches)
-      .values({ id: batchId, accountId, count: rows.length, committedAt: new Date().toISOString() })
+      .values({ id: batchId, accountId, count, committedAt: new Date().toISOString() })
       .run();
 
-    return rows.length;
+    return count;
   });
 }
 
