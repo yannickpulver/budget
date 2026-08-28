@@ -26,7 +26,7 @@ import {
 } from "@/lib/queries";
 import { refreshPayeeIcons, type PayeeIconRefreshResult } from "@/lib/payee-icons";
 import { withUndoStep } from "@/lib/undo";
-import { isValidNumber } from "@/lib/validation";
+import { isValidIsoDate, isValidNumber } from "@/lib/validation";
 // `refresh` lives here (not this file) because every export of a "use
 // server" module must itself be an async server action.
 import { refresh } from "./refresh";
@@ -185,7 +185,7 @@ export interface TransactionFormInput {
 }
 
 export async function createTransactionAction(input: TransactionFormInput): Promise<ActionResult> {
-  if (!input.date) return { ok: false, error: "Date is required." };
+  if (!isValidIsoDate(input.date)) return { ok: false, error: "Invalid date (expected YYYY-MM-DD)." };
   if (input.amount === 0) return { ok: false, error: "Enter an outflow or inflow amount." };
   if (!isValidNumber(input.amount)) return { ok: false, error: "Amount is not a valid number." };
 
@@ -216,7 +216,7 @@ export interface TransferFormInput {
 }
 
 export async function createTransferAction(input: TransferFormInput): Promise<ActionResult> {
-  if (!input.date) return { ok: false, error: "Date is required." };
+  if (!isValidIsoDate(input.date)) return { ok: false, error: "Invalid date (expected YYYY-MM-DD)." };
   if (input.amount === 0) return { ok: false, error: "Enter an amount." };
   if (!isValidNumber(input.amount)) return { ok: false, error: "Amount is not a valid number." };
   if (input.fromAccountId === input.toAccountId) {
@@ -244,7 +244,7 @@ export async function updateTransactionAction(
   otherAccountId: number | null,
   input: TransactionEditInput
 ): Promise<ActionResult> {
-  if (!input.date) return { ok: false, error: "Date is required." };
+  if (!isValidIsoDate(input.date)) return { ok: false, error: "Invalid date (expected YYYY-MM-DD)." };
   if (input.amount === 0) return { ok: false, error: "Enter an outflow or inflow amount." };
   if (!isValidNumber(input.amount)) return { ok: false, error: "Amount is not a valid number." };
 

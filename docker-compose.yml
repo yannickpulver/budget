@@ -9,4 +9,6 @@ services:
       - ./data:/data
     environment:
       - DATABASE_PATH=/data/budget.db
+      # Enables /api/v1 for the CLI; read from .env next to this compose file.
+      - API_TOKEN=${API_TOKEN:-}
     restart: unless-stopped
