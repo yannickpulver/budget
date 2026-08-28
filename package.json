@@ -2,6 +2,9 @@
   "name": "budget",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "budget": "cli/budget.ts"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
