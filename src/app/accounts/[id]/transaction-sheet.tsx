@@ -11,7 +11,6 @@ import type { CategoryGroupOption, RegisterRow, TransferTarget } from "@/lib/que
 import { cn } from "@/lib/utils";
 import { convertToTransferAction, deleteTransactionAction } from "../actions";
 import { CategorySelect } from "./category-select";
-import { CategoryTransferSelect, type CategorySelection } from "./category-transfer-select";
 import {
   amountToFields,
   createTransaction,
@@ -112,16 +111,19 @@ function TransactionForm({
   const [amountFields, setAmountFields] = useState<AmountFields>(() =>
     row ? amountToFields(row.amount) : { outflow: "", inflow: "" }
   );
-  const [categoryId, setCategoryId] = useState<number | null>(row?.categoryId ?? null);
-  const [selection, setSelection] = useState<CategorySelection>(() =>
-    defaultCategoryId != null ? { kind: "category", categoryId: defaultCategoryId } : { kind: "rta" }
+  const [categoryId, setCategoryId] = useState<number | null>(
+    row ? row.categoryId : (defaultCategoryId ?? null)
   );
+  /** Create mode: set by picking a "Transfer: <Account>" payee entry. */
+  const [transferTo, setTransferTo] = useState<number | null>(null);
 
-  const isTransfer = row?.transferAccountId != null;
+  const isTransfer = row ? row.transferAccountId != null : transferTo != null;
   // Only the on-budget leg of a transfer to/from a tracking account carries a
   // budget category — same rule the desktop row applies.
-  const linkedCategoryEditable =
-    isTransfer && accountType !== "tracking" && otherAccountType === "tracking";
+  const transferTarget = transferTo == null ? undefined : transferTargets.find((a) => a.id === transferTo);
+  const linkedCategoryEditable = row
+    ? row.transferAccountId != null && accountType !== "tracking" && otherAccountType === "tracking"
+    : transferTarget?.type === "tracking";
 
   function save() {
     const validated = validateAmountAndDate(amountFields, date);
@@ -139,7 +141,8 @@ function TransactionForm({
           payee,
           memo,
           amount: validated.amount,
-          selection,
+          transferTo,
+          categoryId,
           transferTargets,
         });
         if (!result.ok) {
@@ -191,7 +194,10 @@ function TransactionForm({
   /** Picking a "Transfer: <Account>" payee converts (or retargets) the row, exactly as on desktop. */
   function convertToTransfer(toAccountId: number) {
     if (!row) {
-      setSelection({ kind: "transfer", accountId: toAccountId, categoryId: null });
+      const target = transferTargets.find((a) => a.id === toAccountId);
+      setTransferTo(toAccountId);
+      setPayee(`Transfer: ${target?.name ?? "?"}`);
+      if (target?.type !== "tracking") setCategoryId(null);
       return;
     }
     setError(null);
@@ -223,8 +229,8 @@ function TransactionForm({
         />
       </Field>
 
-      <Field label={isTransfer ? "Transfer" : "Payee"}>
-        {isTransfer ? (
+      <Field label={row && isTransfer ? "Transfer" : "Payee"}>
+        {row && isTransfer ? (
           <div className="flex h-8 items-center gap-1.5 rounded-lg border border-input px-2.5 text-sm text-muted-foreground">
             <ArrowLeftRight className="size-3.5 shrink-0" />
             <span className="min-w-0 truncate">{row?.transferAccountName ?? "?"}</span>
@@ -233,7 +239,12 @@ function TransactionForm({
           <PayeeInput
             suggestions={payeeSuggestions}
             value={payee}
-            onValueChange={setPayee}
+            // Typing over a "Transfer: <Account>" payee makes this a plain
+            // transaction again, exactly as it does on an existing row.
+            onValueChange={(next) => {
+              setPayee(next);
+              if (!row) setTransferTo(null);
+            }}
             transferTargets={transferTargets}
             onTransferSelect={convertToTransfer}
             onEnter={() => save()}
@@ -243,18 +254,8 @@ function TransactionForm({
         )}
       </Field>
 
-      {!row && (
-        <Field label="Category">
-          <CategoryTransferSelect
-            groups={groups}
-            transferTargets={transferTargets}
-            value={selection}
-            onChange={setSelection}
-          />
-        </Field>
-      )}
-
-      {row && (!isTransfer || linkedCategoryEditable) && (
+      {/* A transfer between two on-budget accounts carries no category at all. */}
+      {(!isTransfer || linkedCategoryEditable) && (
         <Field label={isTransfer ? "Budget category" : "Category"}>
           <CategorySelect
             groups={groups}

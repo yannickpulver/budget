@@ -7,17 +7,12 @@ import { Input } from "@/components/ui/input";
 import { PayeeInput } from "@/components/payee-input";
 import type { CategoryGroupOption, TransferTarget } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import { CategoryTransferSelect, type CategorySelection } from "./category-transfer-select";
+import { CategorySelect } from "./category-select";
 import { REGISTER_GRID } from "./grid";
 import { createTransaction, validateAmountAndDate } from "./transaction-fields";
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
-}
-
-/** Giftcard accounts default new spend to their own category; others to Ready to Assign. */
-function initialSelection(defaultCategoryId: number | null | undefined): CategorySelection {
-  return defaultCategoryId != null ? { kind: "category", categoryId: defaultCategoryId } : { kind: "rta" };
 }
 
 export function AddTransactionRow({
@@ -31,24 +26,40 @@ export function AddTransactionRow({
   groups: CategoryGroupOption[];
   transferTargets: TransferTarget[];
   payeeSuggestions: string[];
+  /** Giftcard accounts default new spend to their own category. */
   defaultCategoryId?: number | null;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [date, setDate] = useState(todayIso());
   const [payee, setPayee] = useState("");
-  const [selection, setSelection] = useState<CategorySelection>(() => initialSelection(defaultCategoryId));
+  const [transferTo, setTransferTo] = useState<number | null>(null);
+  const [categoryId, setCategoryId] = useState<number | null>(defaultCategoryId ?? null);
   const [memo, setMemo] = useState("");
   const [outflow, setOutflow] = useState("");
   const [inflow, setInflow] = useState("");
 
+  // Only the on-budget leg of a transfer to/from a tracking account carries a
+  // budget category — same rule the existing rows apply.
+  const transferTarget = transferTo == null ? undefined : transferTargets.find((a) => a.id === transferTo);
+  const linkedCategoryEditable = transferTarget?.type === "tracking";
+
   function reset() {
     setPayee("");
-    setSelection(initialSelection(defaultCategoryId));
+    setTransferTo(null);
+    setCategoryId(defaultCategoryId ?? null);
     setMemo("");
     setOutflow("");
     setInflow("");
     setError(null);
+  }
+
+  /** Picking a "Transfer: <Account>" payee entry makes this row a transfer. */
+  function selectTransfer(toAccountId: number) {
+    const target = transferTargets.find((a) => a.id === toAccountId);
+    setTransferTo(toAccountId);
+    setPayee(`Transfer: ${target?.name ?? "?"}`);
+    if (target?.type !== "tracking") setCategoryId(null);
   }
 
   function save() {
@@ -66,7 +77,8 @@ export function AddTransactionRow({
         payee,
         memo,
         amount: validated.amount,
-        selection,
+        transferTo,
+        categoryId,
         transferTargets,
       });
       if (!result.ok) {
@@ -90,18 +102,31 @@ export function AddTransactionRow({
           suggestions={payeeSuggestions}
           placeholder="Payee"
           value={payee}
-          onValueChange={setPayee}
+          // Typing over a "Transfer: <Account>" payee makes this a plain
+          // transaction again, exactly as it does on an existing row.
+          onValueChange={(next) => {
+            setPayee(next);
+            setTransferTo(null);
+          }}
           onEnter={() => save()}
           transferTargets={transferTargets}
-          onTransferSelect={(toAccountId) => setSelection({ kind: "transfer", accountId: toAccountId, categoryId: null })}
+          onTransferSelect={selectTransfer}
           className="h-7 text-sm"
         />
-        <CategoryTransferSelect
-          groups={groups}
-          transferTargets={transferTargets}
-          value={selection}
-          onChange={setSelection}
-        />
+        {transferTo != null && !linkedCategoryEditable ? (
+          <div className="flex h-8 min-w-0 items-center px-2.5 text-sm text-muted-foreground">
+            <span className="min-w-0 truncate">—</span>
+          </div>
+        ) : (
+          <CategorySelect
+            groups={groups}
+            value={categoryId}
+            onChange={setCategoryId}
+            includeReadyToAssign={transferTo == null}
+            placeholder={transferTo == null ? "Category" : "Budget category"}
+            className="w-full min-w-0"
+          />
+        )}
         <Input
           placeholder="Memo"
           value={memo}
