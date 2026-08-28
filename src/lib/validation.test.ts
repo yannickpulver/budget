@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidNumber, MAX_ABS_NUMBER } from "./validation";
+import { isValidIsoDate, isValidNumber, MAX_ABS_NUMBER } from "./validation";
 
 describe("isValidNumber", () => {
   it("accepts ordinary finite amounts, positive and negative", () => {
@@ -28,5 +28,27 @@ describe("isValidNumber", () => {
   it("respects a custom max", () => {
     expect(isValidNumber(50, 100)).toBe(true);
     expect(isValidNumber(150, 100)).toBe(false);
+  });
+});
+
+describe("isValidIsoDate", () => {
+  it("accepts a valid YYYY-MM-DD date", () => {
+    expect(isValidIsoDate("2025-03-01")).toBe(true);
+  });
+
+  it("rejects the wrong format", () => {
+    expect(isValidIsoDate("01.03.2025")).toBe(false);
+  });
+
+  it("rejects an impossible calendar date", () => {
+    expect(isValidIsoDate("2025-13-45")).toBe(false);
+  });
+
+  it("rejects garbage", () => {
+    expect(isValidIsoDate("garbage")).toBe(false);
+  });
+
+  it("rejects an empty string", () => {
+    expect(isValidIsoDate("")).toBe(false);
   });
 });
