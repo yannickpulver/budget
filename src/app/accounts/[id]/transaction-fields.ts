@@ -6,7 +6,6 @@ import {
   updateTransactionAction,
   type ActionResult,
 } from "../actions";
-import type { CategorySelection } from "./category-transfer-select";
 
 /**
  * Field parsing, validation and the save calls shared by the register's three
@@ -93,7 +92,7 @@ export function saveTransaction(
 
 /**
  * Creates a new row from the add-transaction form state — a transfer when the
- * category picker points at another account, a plain transaction otherwise.
+ * payee field points at another account, a plain transaction otherwise.
  */
 export function createTransaction(input: {
   accountId: number;
@@ -101,25 +100,26 @@ export function createTransaction(input: {
   payee: string;
   memo: string;
   amount: number;
-  selection: CategorySelection;
+  /** Set by picking a "Transfer: <Account>" payee entry. */
+  transferTo: number | null;
+  categoryId: number | null;
   transferTargets: TransferTarget[];
 }): Promise<ActionResult> {
-  const { accountId, date, payee, memo, amount, selection, transferTargets } = input;
-  if (selection.kind === "transfer") {
+  const { accountId, date, payee, memo, amount, transferTo, categoryId, transferTargets } = input;
+  if (transferTo != null) {
     const needsLinkedCategory =
-      transferTargets.find((a) => a.id === selection.accountId)?.type === "tracking" &&
-      selection.categoryId == null;
+      transferTargets.find((a) => a.id === transferTo)?.type === "tracking" && categoryId == null;
     if (needsLinkedCategory) {
       return Promise.resolve({ ok: false, error: "Choose a budget category for this transfer." });
     }
     return createTransferAction({
       fromAccountId: accountId,
-      toAccountId: selection.accountId,
+      toAccountId: transferTo,
       date,
       amount,
       memo,
       cleared: true,
-      categoryId: selection.categoryId,
+      categoryId,
     });
   }
   return createTransactionAction({
@@ -129,6 +129,6 @@ export function createTransaction(input: {
     memo,
     cleared: true,
     amount,
-    categoryId: selection.kind === "category" ? selection.categoryId : null,
+    categoryId,
   });
 }
