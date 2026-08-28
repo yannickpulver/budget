@@ -189,6 +189,50 @@ Notes:
 - Files may be UTF-8 with or without BOM; fields with commas must be
   quoted (any standard CSV writer does this).
 
+## API & CLI
+
+`budget` is a small command-line client for the same server. It needs no
+dependencies of its own — Node 22.18+ runs its TypeScript directly.
+
+Set `API_TOKEN` on the server first (the API stays off until you do): put it
+in the `.env` next to `docker-compose.yml`, e.g.
+`API_TOKEN=$(openssl rand -hex 32)`, and restart the container.
+
+```
+GET  /api/v1/accounts[?all=1]            GET  /api/v1/categories[?month=YYYY-MM]
+GET  /api/v1/accounts/:id/transactions   GET  /api/v1/payees
+POST /api/v1/transactions                POST /api/v1/transfers
+POST /api/v1/undo
+```
+
+All of these take `Authorization: Bearer <API_TOKEN>`; amounts are signed
+integer minor units (Rappen).
+
+Then, from a clone of this repo:
+
+```bash
+pnpm link --global                  # puts `budget` on your PATH
+budget login https://budget.example # asks for the token, offers a default account
+```
+
+```
+budget accounts [--all]             accounts with balances
+budget categories [YYYY-MM]         Ready to Assign and available per category
+budget tx [account] [-n 20] [-s q]  an account's transactions
+budget add <amount> <payee> [-a account] [-c category] [-d YYYY-MM-DD] [-m memo] [--inflow] [--cleared]
+budget transfer <amount> --from <account> --to <account> [-d YYYY-MM-DD] [-m memo] [--cleared]
+budget undo                         undo the last change
+budget logout                       forget the stored config
+```
+
+Accounts and categories are matched by name, case-insensitively, on an exact
+or unique partial match (`-c groceries`, or `-c Spending/Groceries`). Amounts
+are plain numbers (`12.50`, `1'200`) and are outflows unless `--inflow`.
+
+Every command takes `--json`, which prints the result as JSON and nothing
+else. Credentials live in `~/.config/budget/config.json` (mode 0600);
+`BUDGET_URL` and `BUDGET_TOKEN` override them.
+
 ## Investments & privacy
 
 Tracking-account holdings (symbol + quantity) get priced via Yahoo Finance's
