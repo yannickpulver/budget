@@ -8,6 +8,11 @@ export const metadata: Metadata = {
   title: "Categories · budget",
 };
 
+// Reads the live database on every request. Without this, `next build`
+// prerenders the page against the empty build-time DB and serves that
+// "no categories yet" HTML after each deploy until something revalidates.
+export const dynamic = "force-dynamic";
+
 export default function CategoriesSettingsPage() {
   const groups = listCategoryGroupsAdmin();
 
