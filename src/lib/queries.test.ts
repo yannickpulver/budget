@@ -98,7 +98,7 @@ function seed() {
     INSERT INTO categories (id, group_id, name, sort) VALUES
       (${GROCERIES}, 10, 'Groceries', 0),
       (${RENT}, 10, 'Rent', 1),
-      (${SAVING}, 10, 'Swissquote', 2);
+      (${SAVING}, 10, 'Brokerage', 2);
     -- Jan: income + assignments + spending.
     INSERT INTO transactions (account_id, date, category_id, amount) VALUES
       (1, '2025-01-05', NULL, 500000),
@@ -521,14 +521,14 @@ describe("getCategoryStats", () => {
 
   // Fix 1: the Categories tab's all-categories aggregate must reconcile with
   // Overview's spending total, which excludes transfers entirely -- including
-  // a categorized transfer leg like "Transfer to Swissquote" filed under a
+  // a categorized transfer leg like "Transfer to Brokerage" filed under a
   // Saving/Investing category. A single-category drill-down, however, is a
   // ledger view of that one category and must keep showing the leg.
   it("excludes a categorized transfer leg from the all-categories aggregate", () => {
     sqlite.exec(`
-      INSERT INTO accounts (id, name, type) VALUES (99, 'Swissquote', 'tracking');
+      INSERT INTO accounts (id, name, type) VALUES (99, 'Brokerage', 'tracking');
       -- A categorized transfer leg to a tracking account (e.g. "Transfer to
-      -- Swissquote" filed under Saving/Investing) -- moving money, not spending.
+      -- Brokerage" filed under Saving/Investing) -- moving money, not spending.
       INSERT INTO transactions (account_id, date, category_id, amount, transfer_account_id) VALUES
         (1, '2025-02-15', ${SAVING}, -30000, 99);
     `);
@@ -541,7 +541,7 @@ describe("getCategoryStats", () => {
 
   it("includes that same transfer leg when drilling into its specific category", () => {
     sqlite.exec(`
-      INSERT INTO accounts (id, name, type) VALUES (99, 'Swissquote', 'tracking');
+      INSERT INTO accounts (id, name, type) VALUES (99, 'Brokerage', 'tracking');
       INSERT INTO transactions (account_id, date, category_id, amount, transfer_account_id) VALUES
         (1, '2025-02-15', ${SAVING}, -30000, 99);
     `);

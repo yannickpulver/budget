@@ -462,7 +462,7 @@ describe("convertTransactionToTransfer", () => {
     const id = createTransaction(dbi, {
       accountId: CHECKING,
       date: "2025-03-01",
-      payee: "Viseca Card Services",
+      payee: "Card Services AG",
       categoryId: INVESTING,
       memo: "",
       amount: -20000,
@@ -477,7 +477,7 @@ describe("convertTransactionToTransfer", () => {
     const to = rows.find((r) => r.id !== id)!;
 
     expect(from.payee).toBe("Transfer");
-    expect(from.memo).toBe("Viseca Card Services");
+    expect(from.memo).toBe("Card Services AG");
     expect(from.category_id).toBeNull();
     expect(from.amount).toBe(-20000);
     expect(from.transfer_account_id).toBe(SAVINGS);
@@ -485,7 +485,7 @@ describe("convertTransactionToTransfer", () => {
     expect(to.account_id).toBe(SAVINGS);
     expect(to.amount).toBe(20000);
     expect(to.payee).toBe("Transfer");
-    expect(to.memo).toBe("Viseca Card Services");
+    expect(to.memo).toBe("Card Services AG");
     expect(to.category_id).toBeNull();
     expect(to.transfer_account_id).toBe(CHECKING);
     expect(to.transfer_pair_id).toBe(from.transfer_pair_id);
@@ -519,7 +519,7 @@ describe("convertTransactionToTransfer", () => {
     const id = createTransaction(dbi, {
       accountId: CHECKING,
       date: "2025-03-01",
-      payee: "Viseca Card Services",
+      payee: "Card Services AG",
       categoryId: null,
       memo: "Existing memo",
       amount: -1000,

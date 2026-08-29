@@ -80,7 +80,7 @@ const TRACKING = 1;
 function seed() {
   sqlite.exec(DDL);
   sqlite.exec(`
-    INSERT INTO accounts (id, name, type) VALUES (${TRACKING}, 'Swissquote', 'tracking');
+    INSERT INTO accounts (id, name, type) VALUES (${TRACKING}, 'Brokerage', 'tracking');
     INSERT INTO settings (key, value) VALUES ('currency', 'CHF');
   `);
 }

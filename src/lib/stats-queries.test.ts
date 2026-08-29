@@ -229,7 +229,7 @@ describe("getNetWorthHistory", () => {
     // 2026-03: gap, unchanged.
     expect(points[9].balance).toBe(349000);
 
-    // Account 4 has no holdings rows at all (the Viac case): no swap
+    // Account 4 has no holdings rows at all (the pension-account case): no swap
     // happens anywhere, so liveValuation is false by default.
     expect(liveValuation).toBe(false);
   });
@@ -239,7 +239,7 @@ describe("getNetWorthHistory", () => {
   // movement, none of which touches account 4's 100000 cost-basis deposit).
   const TRANSACTION_DERIVED_APRIL_BALANCE = 335500;
 
-  it("keeps a zero-holdings tracking account's transaction-derived balance untouched (the Viac case)", () => {
+  it("keeps a zero-holdings tracking account's transaction-derived balance untouched (the pension-account case)", () => {
     // Account 4 has no `holdings` rows in the base fixture — tracked by
     // balance, not by instrument.
     const { points, liveValuation } = getNetWorthHistory(makeDb(), NOW);

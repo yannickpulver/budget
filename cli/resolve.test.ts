@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { resolveName } from "./resolve.ts";
 
 const accounts = [
-  { name: "Neon" },
-  { name: "Neon Savings" },
-  { name: "Revolut" },
+  { name: "Alpine Bank" },
+  { name: "Alpine Savings" },
+  { name: "Nomad Card" },
 ];
 
 const categories = [
@@ -15,20 +15,20 @@ const categories = [
 
 describe("resolveName", () => {
   it("prefers an exact match over a substring match", () => {
-    expect(resolveName(accounts, "Neon", "account").name).toBe("Neon");
+    expect(resolveName(accounts, "Alpine Bank", "account").name).toBe("Alpine Bank");
   });
 
   it("resolves a unique substring match", () => {
-    expect(resolveName(accounts, "sav", "account").name).toBe("Neon Savings");
+    expect(resolveName(accounts, "sav", "account").name).toBe("Alpine Savings");
   });
 
   it("ignores case on both sides", () => {
-    expect(resolveName(accounts, "rEvOlUt", "account").name).toBe("Revolut");
+    expect(resolveName(accounts, "nOmAd", "account").name).toBe("Nomad Card");
   });
 
   it("lists the candidates when several match", () => {
-    expect(() => resolveName(accounts, "neo", "account")).toThrow(
-      'Several account matches for "neo": Neon, Neon Savings',
+    expect(() => resolveName(accounts, "alp", "account")).toThrow(
+      'Several account matches for "alp": Alpine Bank, Alpine Savings',
     );
   });
 

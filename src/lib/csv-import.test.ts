@@ -79,13 +79,13 @@ describe("parseImportCsv", () => {
   it("reads the optional Transfer column, leaving it null when absent or blank", () => {
     const csv = Buffer.from(
       "Date,Payee,Memo,Outflow,Inflow,Transfer\n" +
-        "21.07.2026,Viseca Card Services,,CHF 3257.75,,Cumulus Credit Card\n" +
+        "21.07.2026,Card Services AG,,CHF 3257.75,,Rewards Credit Card\n" +
         "22.07.2026,Coop,,CHF 42.50,,\n"
     );
     const result = parseImportCsv(csv);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.rows[0].transferAccountName).toBe("Cumulus Credit Card");
+    expect(result.rows[0].transferAccountName).toBe("Rewards Credit Card");
     expect(result.rows[1].transferAccountName).toBeNull();
   });
 
@@ -659,20 +659,20 @@ describe("importing transfers", () => {
   }
 
   it("resolves the counterpart account case-insensitively and stores the row as a Transfer", () => {
-    const { preview } = previewOf("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca,,CHF 100.00,,savings\n");
+    const { preview } = previewOf("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Cardco,,CHF 100.00,,savings\n");
     expect(preview[0]).toMatchObject({
       transferAccountId: SAVINGS,
       transferAccountName: "Savings",
       // Payee becomes "Transfer" (app convention); the CSV's payee moves to memo.
       payee: "Transfer",
-      memo: "Viseca",
+      memo: "Cardco",
       amount: -10000,
     });
   });
 
   it("keeps an explicit memo and does not overwrite it with the payee", () => {
     const { preview } = previewOf(
-      "Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca,Card bill,CHF 100.00,,Savings\n"
+      "Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Cardco,Card bill,CHF 100.00,,Savings\n"
     );
     expect(preview[0].memo).toBe("Card bill");
   });
@@ -680,7 +680,7 @@ describe("importing transfers", () => {
   it("commits both legs, linked by transferPairId, with the hash only on the imported leg", () => {
     const dbi = makeDb();
     const parsed = parseImportCsv(
-      Buffer.from("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca,,CHF 100.00,,Savings\n")
+      Buffer.from("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Cardco,,CHF 100.00,,Savings\n")
     );
     if (!parsed.ok) throw new Error("expected parse to succeed");
     const preview = buildImportPreview(dbi, CHECKING, parsed.rows);
@@ -724,7 +724,7 @@ describe("importing transfers", () => {
        VALUES (${CHECKING}, '2026-07-21', 'Transfer', -10000, 1, ${SAVINGS})`
     );
     const parsed = parseImportCsv(
-      Buffer.from("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca Card Services,,CHF 100.00,,Savings\n")
+      Buffer.from("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Card Services AG,,CHF 100.00,,Savings\n")
     );
     if (!parsed.ok) throw new Error("expected parse to succeed");
     expect(buildImportPreview(dbi, CHECKING, parsed.rows)[0].status).toBe("duplicate");
@@ -769,7 +769,7 @@ describe("findTransferAccountErrors", () => {
 
   it("rejects an unknown counterpart account rather than importing it as spending", () => {
     const dbi = makeDb();
-    const rows = rowsOf("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca,,CHF 100.00,,Nope\n");
+    const rows = rowsOf("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Cardco,,CHF 100.00,,Nope\n");
     expect(findTransferAccountErrors(dbi, CHECKING, rows)).toEqual([
       { line: 2, message: 'Unknown transfer account "Nope".' },
     ]);
@@ -777,7 +777,7 @@ describe("findTransferAccountErrors", () => {
 
   it("rejects a transfer pointing at the account being imported into", () => {
     const dbi = makeDb();
-    const rows = rowsOf("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Viseca,,CHF 100.00,,Checking\n");
+    const rows = rowsOf("Date,Payee,Memo,Outflow,Inflow,Transfer\n21.07.2026,Cardco,,CHF 100.00,,Checking\n");
     expect(findTransferAccountErrors(dbi, CHECKING, rows)).toEqual([
       { line: 2, message: 'Transfer account "Checking" is this account.' },
     ]);

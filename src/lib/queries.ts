@@ -1798,7 +1798,7 @@ const TRANSFER_PAYEE = "Transfer";
  * every other transfer in the app, so a re-import dedups against transfers that
  * were entered by hand — those carry no usable `import_hash`, leaving the
  * date+amount+payee triple as the only thing that can match. The CSV's own payee
- * text (e.g. "Viseca Card Services") would defeat that, so it moves to the memo.
+ * text (e.g. "Card Services AG") would defeat that, so it moves to the memo.
  */
 function transferPayee(row: { payee: string; transferAccountName: string | null }): string {
   return row.transferAccountName == null ? row.payee : TRANSFER_PAYEE;

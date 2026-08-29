@@ -40,9 +40,9 @@ describe("isValidIsoDate", () => {
 
 describe("table", () => {
   it("pads columns to the widest cell and right-aligns where asked", () => {
-    expect(table([["Neon", "1.00"], ["PostFinance", "123.45"]], ["l", "r"])).toEqual([
-      "Neon           1.00",
-      "PostFinance  123.45",
+    expect(table([["Alpine Bank", "1.00"], ["River Bank", "123.45"]], ["l", "r"])).toEqual([
+      "Alpine Bank    1.00",
+      "River Bank   123.45",
     ]);
   });
 });

@@ -69,7 +69,7 @@ export interface NetWorthHistory {
  * cases:
  *
  * - No `holdings` rows at all (tracked by balance, not by instrument — e.g. a
- *   pension account like Viac): its transaction-derived balance is left
+ *   pillar-3a pension account): its transaction-derived balance is left
  *   untouched. There is nothing to value it against.
  * - Holdings rows, every symbol priced: its transaction-derived cost basis is
  *   swapped for the live valuation (`sum(quantity * prices.priceRappen)`).
