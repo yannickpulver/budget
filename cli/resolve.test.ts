@@ -27,8 +27,8 @@ describe("resolveName", () => {
   });
 
   it("lists the candidates when several match", () => {
-    expect(() => resolveName(accounts, "neo", "account")).toThrow(
-      'Several account matches for "neo": Alpine Bank, Alpine Savings',
+    expect(() => resolveName(accounts, "alp", "account")).toThrow(
+      'Several account matches for "alp": Alpine Bank, Alpine Savings',
     );
   });
 

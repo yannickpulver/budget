@@ -41,8 +41,8 @@ describe("isValidIsoDate", () => {
 describe("table", () => {
   it("pads columns to the widest cell and right-aligns where asked", () => {
     expect(table([["Alpine Bank", "1.00"], ["River Bank", "123.45"]], ["l", "r"])).toEqual([
-      "Alpine Bank           1.00",
-      "River Bank  123.45",
+      "Alpine Bank    1.00",
+      "River Bank   123.45",
     ]);
   });
 });

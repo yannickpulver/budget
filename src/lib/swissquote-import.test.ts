@@ -3,10 +3,9 @@ import { computeSwissquoteImportHash, mapSwissquoteTicker, parseStatementText } 
 
 /**
  * Pure parser tests against a synthetic fixture that mimics `pdf-parse`'s
- * exact tab-delimited extraction shape (verified against the real Kontoauszug
- * PDFs during development — see PLAN.md/TODO.md) but with invented
- * name/address/IBAN/amounts. No real statement data or PDFs are committed;
- * this string is the entire fixture.
+ * exact tab-delimited extraction shape (verified against real statement PDFs
+ * during development) but with invented name/address/IBAN/amounts. No real
+ * statement data or PDFs are committed; this string is the entire fixture.
  *
  * Layout notes replicated on purpose because the parser depends on them:
  *  - every field is separated by a literal tab, sometimes preceded by a
