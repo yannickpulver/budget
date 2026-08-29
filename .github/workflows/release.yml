@@ -95,6 +95,8 @@ jobs:
             type=raw,value=${{ needs.version.outputs.version }}
 
       - uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
           push: true
@@ -112,6 +114,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
+          pattern: budget-*
           path: artifacts
           merge-multiple: true
 
