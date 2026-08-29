@@ -28,28 +28,47 @@ file that you own.
 - **Category management** — create, rename, and hide category groups and
   categories from Settings → Categories.
 
-## Screenshots
-
-_Add screenshots of the budget view, account register, and import flow
-here._
+Built in Switzerland, so the defaults are Swiss: CHF as the currency,
+`DD.MM.YYYY` dates in CSV import, Swiss thousands separators (`5'400.00`), and
+payee favicon guessing that tries `.ch` domains first. Other locales work, they
+just are not tuned.
 
 ## Quick start
 
 ### Docker (recommended)
 
 ```bash
-git clone https://github.com/<you>/budget.git
+git clone https://github.com/yannickpulver/budget.git
 cd budget
 docker compose up -d
 ```
 
-This builds the image, creates `./data/budget.db` on first run, and serves
-the app on [http://localhost:3000](http://localhost:3000). The database file
-lives entirely in `./data` on the host — back that directory up and you have
-your whole budget.
+This pulls the prebuilt image `ghcr.io/yannickpulver/budget:latest`, creates
+`./data/budget.db` on first run, and serves the app on
+[http://localhost:3000](http://localhost:3000). The database file lives
+entirely in `./data` on the host — back that directory up and you have your
+whole budget.
 
-To use a prebuilt image instead of building locally, edit
-`docker-compose.yml`'s `image:` line once you've published one.
+You don't need the repo for this. A `docker-compose.yml` with just this is
+enough:
+
+```yaml
+services:
+  budget:
+    image: ghcr.io/yannickpulver/budget:latest
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data:/data
+    environment:
+      - DATABASE_PATH=/data/budget.db
+      - API_TOKEN=${API_TOKEN:-}   # optional, enables /api/v1 for the CLI
+    restart: unless-stopped
+```
+
+To build from source instead, uncomment the `build: .` line in
+`docker-compose.yml` and comment out the `image:` line, then run
+`docker compose up -d --build`.
 
 ### Manual (pnpm)
 
@@ -191,8 +210,8 @@ Notes:
 
 ## API & CLI
 
-`budget` is a small command-line client for the same server. It needs no
-dependencies of its own — Node 22.18+ runs its TypeScript directly.
+`budget` is a small command-line client for the same server. It ships as a
+single binary with no dependencies of its own.
 
 Set `API_TOKEN` on the server first (the API stays off until you do): put it
 in the `.env` next to `docker-compose.yml`, e.g.
@@ -208,10 +227,28 @@ POST /api/v1/undo
 All of these take `Authorization: Bearer <API_TOKEN>`; amounts are signed
 integer minor units (Rappen).
 
-Then, from a clone of this repo:
+Then install the CLI, one of:
+
+1. Homebrew (macOS and Linux):
+
+   ```bash
+   brew install yannickpulver/tap/budget
+   ```
+
+2. Download a tarball for macOS or Linux (arm64 or x64) from
+   [Releases](https://github.com/yannickpulver/budget/releases), unpack it, and
+   put the `budget` binary on your PATH.
+
+3. From a clone of this repo, which runs the TypeScript directly and needs
+   Node 22.18+:
+
+   ```bash
+   pnpm link --global
+   ```
+
+Then log in:
 
 ```bash
-pnpm link --global                  # puts `budget` on your PATH
 budget login https://budget.example # asks for the token, offers a default account
 ```
 
@@ -223,6 +260,7 @@ budget add <amount> <payee> [-a account] [-c category] [-d YYYY-MM-DD] [-m memo]
 budget transfer <amount> --from <account> --to <account> [-d YYYY-MM-DD] [-m memo] [--cleared]
 budget undo                         undo the last change
 budget logout                       forget the stored config
+budget --version                    print the installed version
 ```
 
 Accounts and categories are matched by name, case-insensitively, on an exact
@@ -242,6 +280,14 @@ with stale/missing prices or click "Refresh prices" — never automatically in
 the background, never with any of your budget data attached. Everything
 else — every transaction, category, and balance — stays on your machine (or
 your server) in the SQLite file.
+
+## Security
+
+The app has no login by design. Anyone who can reach it can read and change
+the whole budget, so never expose port 3000 to the internet. Run it on
+localhost, behind Tailscale or a VPN, or behind a reverse proxy that does the
+authentication. The `/api/v1` endpoints stay off entirely until you set
+`API_TOKEN`. See [`SECURITY.md`](./SECURITY.md) for reporting a vulnerability.
 
 ## Tech stack
 

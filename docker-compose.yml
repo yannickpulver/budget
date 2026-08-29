@@ -1,7 +1,7 @@
 services:
   budget:
-    build: .
-    # Or, once published: image: ghcr.io/<you>/budget:latest
+    image: ghcr.io/yannickpulver/budget:latest
+    # build: .   # uncomment to build from source (and comment out the image line above)
     ports:
       - "127.0.0.1:3000:3000"
     volumes:

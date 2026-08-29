@@ -1,0 +1,214 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.2.3)"
+        required: true
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - id: resolve
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  cli:
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: bun-darwin-arm64
+            slug: darwin-arm64
+          - os: macos-15-intel
+            target: bun-darwin-x64
+            slug: darwin-x64
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            slug: linux-x64
+          - os: ubuntu-24.04-arm
+            target: bun-linux-arm64
+            slug: linux-arm64
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          bun build cli/budget.ts --compile --target=${{ matrix.target }} --define BUDGET_VERSION="\"$VERSION\"" --outfile budget
+
+      - name: Smoke test
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: ./budget --version | grep -F "$VERSION"
+
+      - name: Package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: tar czf "budget-$VERSION-${{ matrix.slug }}.tar.gz" budget
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: budget-${{ matrix.slug }}
+          path: budget-*-${{ matrix.slug }}.tar.gz
+          if-no-files-found: error
+
+  docker:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/yannickpulver/budget
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ needs.version.outputs.version }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    needs: [version, cli, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            artifacts/budget-${{ needs.version.outputs.version }}-darwin-arm64.tar.gz
+            artifacts/budget-${{ needs.version.outputs.version }}-darwin-x64.tar.gz
+            artifacts/budget-${{ needs.version.outputs.version }}-linux-x64.tar.gz
+            artifacts/budget-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
+
+  homebrew:
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checksums
+        id: sha
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          for slug in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            asset="budget-$VERSION-$slug.tar.gz"
+            curl -fsSL -o "$asset" \
+              "https://github.com/${{ github.repository }}/releases/download/$TAG/$asset"
+            sum=$(sha256sum "$asset" | cut -d' ' -f1)
+            echo "sha_${slug//-/_}=$sum" >> "$GITHUB_OUTPUT"
+          done
+
+      - uses: actions/checkout@v7
+        with:
+          repository: yannickpulver/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Write formula
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          SHA_DARWIN_ARM64: ${{ steps.sha.outputs.sha_darwin_arm64 }}
+          SHA_DARWIN_X64: ${{ steps.sha.outputs.sha_darwin_x64 }}
+          SHA_LINUX_X64: ${{ steps.sha.outputs.sha_linux_x64 }}
+          SHA_LINUX_ARM64: ${{ steps.sha.outputs.sha_linux_arm64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p tap/Formula
+          cat > tap/Formula/budget.rb <<EOF
+          class Budget < Formula
+            desc "Command-line client for the self-hosted budget app"
+            homepage "https://github.com/yannickpulver/budget"
+            version "$VERSION"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/yannickpulver/budget/releases/download/$TAG/budget-$VERSION-darwin-arm64.tar.gz"
+                sha256 "$SHA_DARWIN_ARM64"
+              end
+              on_intel do
+                url "https://github.com/yannickpulver/budget/releases/download/$TAG/budget-$VERSION-darwin-x64.tar.gz"
+                sha256 "$SHA_DARWIN_X64"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/yannickpulver/budget/releases/download/$TAG/budget-$VERSION-linux-arm64.tar.gz"
+                sha256 "$SHA_LINUX_ARM64"
+              end
+              on_intel do
+                url "https://github.com/yannickpulver/budget/releases/download/$TAG/budget-$VERSION-linux-x64.tar.gz"
+                sha256 "$SHA_LINUX_X64"
+              end
+            end
+
+            def install
+              bin.install "budget"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/budget --version")
+            end
+          end
+          EOF
+
+      - name: Commit and push
+        working-directory: tap
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/budget.rb
+          git diff --cached --quiet && exit 0
+          git commit -m "budget $VERSION"
+          git push

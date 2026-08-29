@@ -9,6 +9,11 @@ import { deleteConfig, loadConfig, readConfigFile, saveConfig } from "./config.t
 import { formatMoney, isValidIsoDate, parseMoneyInput, table } from "./format.ts";
 import { resolveName } from "./resolve.ts";
 
+/** Injected at compile time by `bun build --define`; absent when run straight from source. */
+declare const BUDGET_VERSION: string | undefined;
+
+const version = typeof BUDGET_VERSION === "string" ? BUDGET_VERSION : "dev";
+
 type Account = { id: number; name: string; type: string; closed: boolean; balance: number };
 type AccountsResponse = { currency: string; accounts: Account[] };
 
@@ -44,9 +49,11 @@ Commands:
   add <amount> <payee> [-a account] [-c category] [-d YYYY-MM-DD] [-m memo] [--inflow] [--cleared]
   transfer <amount> --from <account> --to <account> [-d YYYY-MM-DD] [-m memo] [--cleared]
   undo                         Undo the last change
+  version                      Print the version
 
 Options:
   --json                       Print the result as JSON and nothing else
+  -v, --version                Print the version
   -h, --help                   Show this help
 
 BUDGET_URL and BUDGET_TOKEN override the stored config.`;
@@ -337,6 +344,10 @@ async function undo(args: string[]): Promise<void> {
   console.log(response.ok ? `Undid: ${response.label ?? "last change"}` : "Nothing to undo.");
 }
 
+function printVersion(): void {
+  console.log(version);
+}
+
 const commands: Record<string, ((args: string[]) => void | Promise<void>) | undefined> = {
   login,
   logout,
@@ -346,6 +357,7 @@ const commands: Record<string, ((args: string[]) => void | Promise<void>) | unde
   add,
   transfer,
   undo,
+  version: printVersion,
 };
 
 async function main(): Promise<void> {
@@ -353,6 +365,12 @@ async function main(): Promise<void> {
   const isHelpFlag = (arg: string | undefined) => arg === "-h" || arg === "--help";
   if (args.length === 0 || isHelpFlag(args[0]) || isHelpFlag(args[1])) {
     console.log(usage);
+    return;
+  }
+
+  const isVersionFlag = (arg: string | undefined) => arg === "-v" || arg === "--version";
+  if (isVersionFlag(args[0])) {
+    printVersion();
     return;
   }
 
