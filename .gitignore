@@ -44,6 +44,10 @@ next-env.d.ts
 /data/
 /plan/
 
-# Server-specific deployment notes
-DEPLOY.md
-deploy.sh
+# local sqlite databases
+*.db
+*.db-shm
+*.db-wal
+
+# compiled cli binary
+/dist

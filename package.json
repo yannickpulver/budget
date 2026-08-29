@@ -12,6 +12,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "build:cli": "bun build cli/budget.ts --compile --outfile dist/budget",
     "db:push": "drizzle-kit push",
     "migrate:ynab": "tsx scripts/migrate-ynab.ts",
     "align:rta": "tsx scripts/align-rta.ts"
