@@ -33,6 +33,17 @@ Built in Switzerland, so the defaults are Swiss: CHF as the currency,
 payee favicon guessing that tries `.ch` domains first. Other locales work, they
 just are not tuned.
 
+## Screenshots
+
+The budget view — month navigation, Ready to Assign, per-category
+Assigned / Activity / Available, and an underfunded monthly goal:
+
+![Budget view](docs/screenshots/budget.png)
+
+An account register with search, categories, and transfers:
+
+![Account register](docs/screenshots/register.png)
+
 ## Quick start
 
 ### Docker (recommended)
