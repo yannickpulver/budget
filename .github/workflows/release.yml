@@ -185,15 +185,14 @@ jobs:
       - name: Checksums
         id: sha
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
+          gh release download "$TAG" -R "${{ github.repository }}" --pattern 'budget-*.tar.gz'
           for slug in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
-            asset="budget-$VERSION-$slug.tar.gz"
-            curl -fsSL -o "$asset" \
-              "https://github.com/${{ github.repository }}/releases/download/$TAG/$asset"
-            sum=$(sha256sum "$asset" | cut -d' ' -f1)
+            sum=$(sha256sum "budget-$VERSION-$slug.tar.gz" | cut -d' ' -f1)
             echo "sha_${slug//-/_}=$sum" >> "$GITHUB_OUTPUT"
           done
 
