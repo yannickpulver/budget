@@ -1003,6 +1003,25 @@ export function getPayeeSuggestions(dbi: DB = db): string[] {
     .map((r) => r.payee);
 }
 
+/**
+ * Every distinct payee across all non-transfer transactions, most-recently-seen
+ * first — the candidate list for payee-icon fetching (see lib/payee-icons.ts).
+ * Deliberately uncapped, unlike `getPayeeSuggestions`: that list is ranked by
+ * usage and trimmed for the client, which silently excluded new one-off payees
+ * from ever getting an icon. Newest-first so a partial run covers what the
+ * register is actually showing.
+ */
+export function getIconPayees(dbi: DB = db): string[] {
+  return dbi
+    .select({ payee: schema.transactions.payee })
+    .from(schema.transactions)
+    .where(and(isNull(schema.transactions.transferAccountId), ne(schema.transactions.payee, "")))
+    .groupBy(schema.transactions.payee)
+    .orderBy(desc(sql`max(${schema.transactions.date})`))
+    .all()
+    .map((r) => r.payee);
+}
+
 export interface CategoryOption {
   id: number;
   name: string;
