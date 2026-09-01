@@ -51,3 +51,28 @@ export function isValidIsoDate(date: string): boolean {
   const parsed = new Date(`${date}T00:00:00Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
 }
+
+/** `field old → new` for every key whose rendered value differs, in `after`'s key order. */
+export function changedFields(before: Record<string, string>, after: Record<string, string>): string[] {
+  return Object.keys(after)
+    .filter((key) => before[key] !== after[key])
+    .map((key) => `${key} ${before[key]} → ${after[key]}`);
+}
+
+/**
+ * Signed amount for an edit. `magnitude` is the new absolute amount (null when
+ * `--amount` was not given). `inflow`/`outflow` force the sign; with neither,
+ * the row keeps the direction it already had.
+ */
+export function resolveEditAmount(
+  currentAmount: number,
+  magnitude: number | null,
+  inflow: boolean,
+  outflow: boolean
+): number | undefined {
+  if (magnitude === null && !inflow && !outflow) return undefined;
+  const abs = Math.abs(magnitude ?? currentAmount);
+  if (inflow) return abs;
+  if (outflow) return -abs;
+  return currentAmount < 0 ? -abs : abs;
+}

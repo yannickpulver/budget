@@ -17,6 +17,10 @@ export class Api {
     return this.request<T>("POST", path, body);
   }
 
+  patch<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>("PATCH", path, body);
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const url = `${this.base}${path}`;
     let response: Response;

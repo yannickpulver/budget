@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 import { Api } from "./api.ts";
 import type { Config } from "./config.ts";
 import { deleteConfig, loadConfig, readConfigFile, saveConfig } from "./config.ts";
-import { formatMoney, isValidIsoDate, parseMoneyInput, table } from "./format.ts";
+import { changedFields, formatMoney, isValidIsoDate, parseMoneyInput, resolveEditAmount, table } from "./format.ts";
 import { resolveName } from "./resolve.ts";
 
 /** Injected at compile time by `bun build --define`; absent when run straight from source. */
@@ -32,6 +32,21 @@ type TransactionRow = {
 };
 type TransactionsResponse = { account: { id: number; name: string }; total: number; rows: TransactionRow[] };
 
+type TransactionDetail = {
+  id: number;
+  accountId: number;
+  accountName: string;
+  date: string;
+  payee: string;
+  memo: string;
+  amount: number;
+  cleared: boolean;
+  categoryId: number | null;
+  categoryName: string | null;
+  transferAccountId: number | null;
+  transferAccountName: string | null;
+};
+
 type UndoResponse = { ok: boolean; label?: string };
 
 const commonOptions = { json: { type: "boolean" } } as const;
@@ -47,6 +62,7 @@ Commands:
   categories [YYYY-MM]         Ready to Assign and what's available per category
   tx [account] [-n 20] [-s q]  Transactions of an account (default: default account)
   add <amount> <payee> [-a account] [-c category] [-d YYYY-MM-DD] [-m memo] [--inflow] [--cleared]
+  edit <id> [--amount 17.50] [--inflow | --outflow] [-d YYYY-MM-DD] [-p payee] [-c category | --no-category] [-m memo] [--cleared | --uncleared]
   transfer <amount> --from <account> --to <account> [-d YYYY-MM-DD] [-m memo] [--cleared]
   undo                         Undo the last change
   version                      Print the version
@@ -243,13 +259,14 @@ async function transactions(args: string[]): Promise<void> {
   if (values.json) return printJson(response);
 
   const rows = response.rows.map((row) => [
+    `#${row.id}`,
     row.date,
     row.transferAccountName ? `Transfer: ${row.transferAccountName}` : (row.payee ?? ""),
     row.categoryName ?? "",
     formatMoney(row.amount),
     row.cleared ? "✓" : "",
   ]);
-  printLines(table(rows, ["l", "l", "l", "r", "l"]));
+  printLines(table(rows, ["l", "l", "l", "l", "r", "l"]));
 }
 
 async function add(args: string[]): Promise<void> {
@@ -293,6 +310,88 @@ async function add(args: string[]): Promise<void> {
 
   const details = [account.name, category?.qualifiedName, payload.date].filter((part) => part !== undefined);
   console.log(`Added ${formatMoney(amount)}  ${payee}  (${details.join(" · ")})`);
+}
+
+/** The fields `edit` can change, rendered for the before/after line. */
+function editableFields(
+  row: { date: string; payee: string; memo: string; amount: number; cleared: boolean },
+  categoryName: string | null
+): Record<string, string> {
+  return {
+    date: row.date,
+    payee: row.payee || "—",
+    memo: row.memo || "—",
+    amount: formatMoney(row.amount),
+    cleared: row.cleared ? "✓" : "—",
+    category: categoryName ?? "—",
+  };
+}
+
+async function edit(args: string[]): Promise<void> {
+  const options = {
+    ...commonOptions,
+    amount: { type: "string" },
+    category: { type: "string", short: "c" },
+    "no-category": { type: "boolean" },
+    date: { type: "string", short: "d" },
+    payee: { type: "string", short: "p" },
+    memo: { type: "string", short: "m" },
+    inflow: { type: "boolean" },
+    outflow: { type: "boolean" },
+    cleared: { type: "boolean" },
+    uncleared: { type: "boolean" },
+  } as const;
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options });
+
+  const rawId = positionals[1];
+  const id = Number(rawId);
+  if (!rawId || !Number.isInteger(id)) throw new Error("Usage: budget edit <id> [options]");
+  if (values.category && values["no-category"]) throw new Error("Pass either -c or --no-category, not both.");
+  if (values.cleared && values.uncleared) throw new Error("Pass either --cleared or --uncleared, not both.");
+  if (values.inflow && values.outflow) throw new Error("Pass either --inflow or --outflow, not both.");
+  if (values.date !== undefined && !isValidIsoDate(values.date)) {
+    throw new Error(`Invalid date "${values.date}" (expected YYYY-MM-DD).`);
+  }
+
+  let magnitude: number | null = null;
+  if (values.amount !== undefined) {
+    const parsed = parseMoneyInput(values.amount);
+    if (parsed === null) throw new Error(`Invalid amount "${values.amount}"`);
+    magnitude = Math.abs(parsed);
+  }
+
+  const { api } = connect();
+  const row = await api.get<TransactionDetail>(`/transactions/${id}`);
+
+  const amount = resolveEditAmount(row.amount, magnitude, values.inflow === true, values.outflow === true);
+  const date = values.date ?? row.date;
+  const category = values.category ? await resolveCategory(api, values.category, date.slice(0, 7)) : null;
+
+  const payload: Record<string, unknown> = {};
+  if (values.date !== undefined) payload.date = values.date;
+  if (values.payee !== undefined) payload.payee = values.payee;
+  if (values.memo !== undefined) payload.memo = values.memo;
+  if (amount !== undefined) payload.amount = amount;
+  if (values.cleared) payload.cleared = true;
+  if (values.uncleared) payload.cleared = false;
+  if (category) payload.categoryId = category.id;
+  if (values["no-category"]) payload.categoryId = null;
+
+  if (Object.keys(payload).length === 0) {
+    throw new Error(
+      "Nothing to change. Usage: budget edit <id> [--amount 17.50] [--inflow | --outflow] [-d YYYY-MM-DD] [-p payee] [-c category | --no-category] [-m memo] [--cleared | --uncleared]"
+    );
+  }
+
+  const response = await api.patch<{ ok: true }>(`/transactions/${id}`, payload);
+  if (values.json) return printJson({ id, ...payload, ...response });
+
+  const merged = { ...row, ...payload } as TransactionDetail;
+  const mergedCategory = values["no-category"] ? null : (category?.qualifiedName ?? row.categoryName);
+  const changes = changedFields(editableFields(row, row.categoryName), editableFields(merged, mergedCategory));
+  const name = row.transferAccountName ? `Transfer: ${row.transferAccountName}` : merged.payee;
+  const transfer = row.transferAccountId === null ? "" : " (transfer, both legs)";
+  console.log(`Edited #${id}  ${name}  ${changes.join("  ")}${transfer}`);
 }
 
 async function transfer(args: string[]): Promise<void> {
@@ -355,6 +454,7 @@ const commands: Record<string, ((args: string[]) => void | Promise<void>) | unde
   categories,
   tx: transactions,
   add,
+  edit,
   transfer,
   undo,
   version: printVersion,
