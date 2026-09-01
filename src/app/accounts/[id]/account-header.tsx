@@ -61,7 +61,10 @@ export function AccountHeader({
     setIconsNotice(null);
     startIconsTransition(async () => {
       const result = await refreshPayeeIconsAction(detail.id);
-      setIconsNotice(`${result.fetched} added, ${result.missed} missed, ${result.skipped} skipped.`);
+      const base = `${result.fetched} added, ${result.missed} missed, ${result.skipped} skipped.`;
+      setIconsNotice(
+        result.remaining > 0 ? `${base} ${result.remaining} left — run again.` : base
+      );
     });
   }
 

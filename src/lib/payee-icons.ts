@@ -21,7 +21,7 @@ import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { db } from "@/db";
 import { dataDir } from "@/db/paths";
 import * as schema from "@/db/schema";
-import { getPayeeSuggestions } from "./queries";
+import { getIconPayees } from "./queries";
 
 type DB = BetterSQLite3Database<typeof schema>;
 
@@ -29,6 +29,12 @@ const FETCH_TIMEOUT_MS = 5000;
 const MAX_ICON_BYTES = 200 * 1024;
 const POLITE_DELAY_MS = 150;
 const RETRY_MISS_MS = 30 * 24 * 60 * 60 * 1000; // re-fetch misses older than 30d
+/**
+ * Wall-clock budget for one run, so a click stays a request-sized amount of
+ * work. A count cap would not bound this: a payee that misses can spend up to
+ * `FETCH_TIMEOUT_MS` on each of its domain/service combinations.
+ */
+const MAX_RUN_MS = 60 * 1000;
 /** A domain that cannot exist, used to learn each service's fallback-icon bytes. */
 const PROBE_DOMAIN = "zzz-nonexistent-payee-probe-4711.ch";
 
@@ -185,6 +191,8 @@ export interface PayeeIconRefreshResult {
   fetched: number;
   missed: number;
   skipped: number;
+  /** Unresolved payees left over once the per-run fetch budget ran out. */
+  remaining: number;
 }
 
 /** Whether an "ok" row's bytes are actually still on disk. */
@@ -194,18 +202,20 @@ function hasIconFile(payee: string): boolean {
 }
 
 /**
- * Fetch icons for every distinct payee, skipping ones already resolved.
- * Existing "ok" rows are skipped unless their file is gone (an older build
- * wrote icons outside the persistent volume, so the row can outlive the bytes);
- * "none" rows are skipped too unless `retryMisses` is set and the miss is older
- * than 30 days. Fetches run sequentially with a small delay to stay polite to
- * the favicon services.
+ * Fetch icons for every distinct payee, newest-seen first, skipping ones
+ * already resolved. Existing "ok" rows are skipped unless their file is gone
+ * (an older build wrote icons outside the persistent volume, so the row can
+ * outlive the bytes); "none" rows are skipped until the miss is 30 days old,
+ * or immediately retried when `retryMisses` is set. Fetches run sequentially
+ * with a small delay to stay polite to the favicon services, and stop once
+ * `MAX_RUN_MS` is up; whatever is left is reported as `remaining` so the
+ * caller can say another run is needed.
  */
 export async function refreshPayeeIcons(
   dbi: DB,
   retryMisses = false
 ): Promise<PayeeIconRefreshResult> {
-  const payees = getPayeeSuggestions(dbi);
+  const payees = getIconPayees(dbi);
   const existing = new Map(
     dbi.select().from(schema.payeeIcons).all().map((r) => [r.payee, r])
   );
@@ -213,6 +223,8 @@ export async function refreshPayeeIcons(
   let fetched = 0;
   let missed = 0;
   let skipped = 0;
+  let remaining = 0;
+  const deadline = Date.now() + MAX_RUN_MS;
 
   for (const payee of payees) {
     const row = existing.get(payee);
@@ -222,10 +234,14 @@ export async function refreshPayeeIcons(
     }
     if (row?.status === "none") {
       const staleEnough = Date.now() - new Date(row.fetchedAt).getTime() > RETRY_MISS_MS;
-      if (!retryMisses || !staleEnough) {
+      if (!retryMisses && !staleEnough) {
         skipped++;
         continue;
       }
+    }
+    if (Date.now() >= deadline) {
+      remaining++;
+      continue;
     }
 
     const result = await fetchPayeeIcon(dbi, payee);
@@ -234,7 +250,7 @@ export async function refreshPayeeIcons(
     await delay(POLITE_DELAY_MS);
   }
 
-  return { fetched, missed, skipped };
+  return { fetched, missed, skipped, remaining };
 }
 
 /**
