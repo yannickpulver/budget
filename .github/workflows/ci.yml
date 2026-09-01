@@ -23,6 +23,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm lint
+
+      # Create the SQLite schema once, up front. Several test files import
+      # src/db/index.ts, which bootstraps a fresh database on load; left to the
+      # parallel vitest workers they race to migrate the same brand-new file and
+      # one loses with SQLITE_BUSY. A checkout has no data/budget.db, so this
+      # only ever runs against an empty database.
+      - run: pnpm db:push
+
       - run: pnpm test
 
   docker-build:
