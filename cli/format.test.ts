@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatMoney, isValidIsoDate, parseMoneyInput, table } from "./format.ts";
+import { changedFields, formatMoney, isValidIsoDate, parseMoneyInput, resolveEditAmount, table } from "./format.ts";
 
 describe("formatMoney", () => {
   it("groups thousands with apostrophes and always shows two decimals", () => {
@@ -44,5 +44,35 @@ describe("table", () => {
       "Alpine Bank    1.00",
       "River Bank   123.45",
     ]);
+  });
+});
+
+describe("changedFields", () => {
+  it("reports one pair per differing field and nothing for equal ones", () => {
+    const before = { date: "2026-08-31", payee: "Backblaze", amount: "-3.39", category: "—" };
+    const after = { date: "2026-08-31", payee: "Backblaze", amount: "-3.40", category: "Spending/Software" };
+    expect(changedFields(before, after)).toEqual(["amount -3.39 → -3.40", "category — → Spending/Software"]);
+    expect(changedFields(before, before)).toEqual([]);
+  });
+});
+
+describe("resolveEditAmount", () => {
+  it("keeps the row's direction when no sign flag is given", () => {
+    expect(resolveEditAmount(-339, 8000, false, false)).toBe(-8000);
+    expect(resolveEditAmount(5000, 5100, false, false)).toBe(5100);
+  });
+
+  it("forces the sign when --inflow or --outflow is given", () => {
+    expect(resolveEditAmount(-339, 8000, true, false)).toBe(8000);
+    expect(resolveEditAmount(5000, 5100, false, true)).toBe(-5100);
+  });
+
+  it("flips the current amount when a sign flag comes without an amount", () => {
+    expect(resolveEditAmount(-339, null, true, false)).toBe(339);
+    expect(resolveEditAmount(5000, null, false, true)).toBe(-5000);
+  });
+
+  it("leaves the amount untouched when neither an amount nor a sign flag is given", () => {
+    expect(resolveEditAmount(-339, null, false, false)).toBeUndefined();
   });
 });

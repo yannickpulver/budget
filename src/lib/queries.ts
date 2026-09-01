@@ -938,6 +938,54 @@ export function getAccountRegister(
   };
 }
 
+export interface TransactionDetail {
+  id: number;
+  accountId: number;
+  accountName: string;
+  date: string;
+  payee: string;
+  memo: string;
+  amount: number;
+  cleared: boolean;
+  categoryId: number | null;
+  categoryName: string | null;
+  transferAccountId: number | null;
+  transferAccountName: string | null;
+}
+
+/** One transaction with its account/category/transfer names, or `null` when the id is unknown. */
+export function getTransactionById(id: number, dbi: DB = db): TransactionDetail | null {
+  const transferAccount = alias(schema.accounts, "transfer_account");
+  const row = dbi
+    .select({
+      id: schema.transactions.id,
+      accountId: schema.transactions.accountId,
+      accountName: schema.accounts.name,
+      date: schema.transactions.date,
+      payee: schema.transactions.payee,
+      memo: schema.transactions.memo,
+      amount: schema.transactions.amount,
+      cleared: schema.transactions.cleared,
+      categoryId: schema.transactions.categoryId,
+      categoryName: schema.categories.name,
+      transferAccountId: schema.transactions.transferAccountId,
+      transferAccountName: transferAccount.name,
+    })
+    .from(schema.transactions)
+    .innerJoin(schema.accounts, eq(schema.transactions.accountId, schema.accounts.id))
+    .leftJoin(schema.categories, eq(schema.transactions.categoryId, schema.categories.id))
+    .leftJoin(transferAccount, eq(schema.transactions.transferAccountId, transferAccount.id))
+    .where(eq(schema.transactions.id, id))
+    .get();
+  if (!row) return null;
+
+  return {
+    ...row,
+    categoryName: row.categoryName ?? null,
+    transferAccountName: row.transferAccountName ?? null,
+  };
+}
+
 /**
  * Distinct payees across all non-transfer transactions, ranked most-used then
  * most-recent first, for the register's payee autocomplete. Capped so the whole
