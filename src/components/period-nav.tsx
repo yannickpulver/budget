@@ -36,13 +36,18 @@ export function PeriodNav({
   className?: string;
 }): React.ReactElement {
   return (
-    <div className={cn("flex items-center gap-1", className)}>
+    <div className={cn("flex flex-wrap items-center gap-1", className)}>
       <NavArrow href={prevHref} label={prevAriaLabel}>
         <ChevronLeft className="size-4" />
       </NavArrow>
       {/* No min width on a phone — 8rem of empty label box crowds out the
           arrows and the "Today" shortcut at 390px. */}
-      <div className={cn("text-center text-sm font-medium md:min-w-32", labelClassName)}>{label}</div>
+      {/* Never wrapped: "August 2026" broken across two lines makes the whole
+          cluster two rows tall. If something has to move to a second line it
+          is the mode pills, via the wrapping root. */}
+      <div className={cn("text-center text-sm font-medium whitespace-nowrap md:min-w-32", labelClassName)}>
+        {label}
+      </div>
       <NavArrow href={nextHref} label={nextAriaLabel}>
         <ChevronRight className="size-4" />
       </NavArrow>
@@ -50,7 +55,7 @@ export function PeriodNav({
       {jumpHref != null && (
         <Link
           href={jumpHref}
-          className="ml-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="ml-1 rounded-md px-2 py-1 text-xs whitespace-nowrap text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           {jumpLabel}
         </Link>

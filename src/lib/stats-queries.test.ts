@@ -3,8 +3,12 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as schema from "@/db/schema";
 import {
+  delta,
+  getCategoryOutflowBetween,
+  getLargestTransactions,
   getMonthlyCashflow,
   getNetWorthHistory,
+  netWorthAt,
   getSpendingByGroup,
   getTopPayees,
   getTrips,
@@ -480,5 +484,251 @@ describe("getTrips", () => {
     `);
     const { trips } = getTrips(makeDb());
     expect(trips.some((t) => t.categoryId === 99)).toBe(false);
+  });
+});
+
+describe("delta", () => {
+  it("reports the absolute and relative change", () => {
+    const d = delta(15000, 10000);
+    expect(d).toMatchObject({ current: 15000, previous: 10000, change: 5000 });
+    expect(d.percent).toBeCloseTo(0.5);
+  });
+
+  it("suppresses the percentage when the previous period is below the CHF 20 floor", () => {
+    // A CHF 4 base turning into CHF 150 is "+3650%" — true, and useless.
+    expect(delta(15000, 400).percent).toBeNull();
+    expect(delta(15000, 400).change).toBe(14600);
+    // Exactly at the floor it is meaningful again.
+    expect(delta(4000, 2000).percent).toBeCloseTo(1);
+  });
+
+  it("suppresses the percentage when the previous period is zero", () => {
+    expect(delta(15000, 0).percent).toBeNull();
+  });
+
+  it("divides by the magnitude of the base, so the percentage carries the change's sign", () => {
+    // A net of −CHF 100 deepening to −CHF 150 is a 50% move DOWN. Dividing by
+    // a signed base would report it as +50%.
+    const worse = delta(-15000, -10000);
+    expect(worse.change).toBe(-5000);
+    expect(worse.percent).toBeCloseTo(-0.5);
+
+    const better = delta(-5000, -10000);
+    expect(better.change).toBe(5000);
+    expect(better.percent).toBeCloseTo(0.5);
+  });
+
+  it("suppresses the percentage when the two figures straddle zero", () => {
+    // −CHF 1'200 to +CHF 1'700 rendered as "−243%", which reads as a
+    // catastrophe rather than as the recovery it is.
+    expect(delta(170000, -120000).percent).toBeNull();
+    expect(delta(170000, -120000).change).toBe(290000);
+    expect(delta(-120000, 170000).percent).toBeNull();
+  });
+});
+
+describe("netWorthAt", () => {
+  it("returns the balance carried into the given month", () => {
+    const { points } = getNetWorthHistory(makeDb(), NOW);
+    expect(netWorthAt(points, "2026-02")).toBe(349000);
+    // A gap month carries the previous balance forward.
+    expect(netWorthAt(points, "2026-03")).toBe(349000);
+  });
+
+  it("returns null before the history starts", () => {
+    const { points } = getNetWorthHistory(makeDb(), NOW);
+    expect(netWorthAt(points, "2025-05")).toBeNull();
+  });
+});
+
+describe("getMonthlyCashflow comparisons", () => {
+  it("computes the previous period's totals over the whole previous month for a finished period", () => {
+    const summary = getMonthlyCashflow("2026-02", makeDb(), NOW);
+
+    expect(summary.partial).toBe(false);
+    expect(summary.previous).toEqual({ income: 500000, spending: 158000, net: 342000 });
+  });
+
+  it("marks a running period partial and compares month-to-date", () => {
+    const summary = getMonthlyCashflow("2026-04", makeDb(), NOW);
+
+    expect(summary.partial).toBe(true);
+    // March is empty, and the month-to-date cut (through the 15th) can only
+    // shrink it further.
+    expect(summary.previous).toEqual({ income: 0, spending: 0, net: 0 });
+  });
+
+  it("has no comparison for all time", () => {
+    expect(getMonthlyCashflow("all", makeDb(), NOW).previous).toBeNull();
+  });
+
+  it("cuts a running period's own totals at today, matching the comparison window", () => {
+    const asOf9th = getMonthlyCashflow("2026-04", makeDb(), new Date("2026-04-09T12:00:00Z"));
+    const asOf15th = getMonthlyCashflow("2026-04", makeDb(), NOW);
+
+    // Cinema (5th) + the empty-payee row (8th); Coop lands on the 10th.
+    expect(asOf9th.spending).toBe(4000);
+    expect(asOf15th.spending).toBe(16000);
+    // The display window still shows the whole month.
+    expect(asOf9th.entries.at(-1)).toMatchObject({ key: "2026-04", spending: 16000 });
+  });
+
+  it("leaves a finished period on its full calendar bounds", () => {
+    expect(getMonthlyCashflow("2026-01", makeDb(), NOW)).toMatchObject({
+      partial: false,
+      spending: 158000,
+      months: 1,
+    });
+  });
+
+  it("returns a 12-month trailing series ending at the period's last month", () => {
+    const summary = getMonthlyCashflow("2026-02", makeDb(), NOW);
+
+    expect(summary.trailing.months).toHaveLength(12);
+    expect(summary.trailing.income).toHaveLength(12);
+    expect(summary.trailing.spending).toHaveLength(12);
+    expect(summary.trailing.net).toHaveLength(12);
+    expect(summary.trailing.months[0]).toBe("2025-03");
+    expect(summary.trailing.months.at(-1)).toBe("2026-02");
+
+    const jan = summary.trailing.months.indexOf("2026-01");
+    expect(summary.trailing.income[jan]).toBe(500000);
+    expect(summary.trailing.spending[jan]).toBe(158000);
+    expect(summary.trailing.net[jan]).toBe(342000);
+  });
+
+  it("ends the trailing series at the current month for a running year and for all time", () => {
+    expect(getMonthlyCashflow("2026", makeDb(), NOW).trailing.months.at(-1)).toBe("2026-04");
+    expect(getMonthlyCashflow("all", makeDb(), NOW).trailing.months.at(-1)).toBe("2026-04");
+    expect(getMonthlyCashflow("all", makeDb(), NOW).trailing.months).toHaveLength(12);
+  });
+
+  it("ends the trailing series at December for a finished year", () => {
+    expect(getMonthlyCashflow("2025", makeDb(), NOW).trailing.months.at(-1)).toBe("2025-12");
+  });
+});
+
+describe("getSpendingByGroup breakdown", () => {
+  it("breaks each group into categories whose shares sum to 1", () => {
+    const { groups } = getSpendingByGroup("all", makeDb(), NOW);
+
+    const spending = groups.find((g) => g.name === "Spending");
+    expect(spending?.categories.map((c) => c.name)).toEqual(["Rent", "Groceries"]);
+    expect(spending?.categories.map((c) => c.outflow)).toEqual([150000, 26000]);
+    for (const group of groups) {
+      const sum = group.categories.reduce((s, c) => s + c.share, 0);
+      expect(sum).toBeCloseTo(1);
+      expect(group.categories.reduce((s, c) => s + c.outflow, 0)).toBe(group.outflow);
+    }
+  });
+
+  it("omits zero-outflow categories from a group's breakdown", () => {
+    const { groups } = getSpendingByGroup("2026-04", makeDb(), NOW);
+    expect(groups.flatMap((g) => g.categories).every((c) => c.outflow > 0)).toBe(true);
+    expect(groups.flatMap((g) => g.categories).some((c) => c.name === "Giftcards")).toBe(false);
+  });
+
+  it("carries the previous period's outflow per group and per category", () => {
+    const { groups } = getSpendingByGroup("2026-02", makeDb(), NOW);
+
+    const spending = groups.find((g) => g.name === "Spending");
+    expect(spending?.outflow).toBe(5000); // Feb groceries
+    expect(spending?.previousOutflow).toBe(158000); // Jan: 8000 groceries + 150000 rent
+    expect(spending?.categories[0]).toMatchObject({ name: "Groceries", previousOutflow: 8000 });
+  });
+
+  it("has no previous outflow for all time", () => {
+    const { groups } = getSpendingByGroup("all", makeDb(), NOW);
+    expect(groups.every((g) => g.previousOutflow === null)).toBe(true);
+    expect(groups.flatMap((g) => g.categories).every((c) => c.previousOutflow === null)).toBe(true);
+  });
+
+  it("keeps a group that spent nothing this period but something last one", () => {
+    // March is empty; February had 5'000 of groceries. "Spending CHF 0,
+    // −CHF 50 vs Feb" is the row the comparison exists for.
+    const { groups, total } = getSpendingByGroup("2026-03", makeDb(), NOW);
+
+    const spending = groups.find((g) => g.name === "Spending");
+    expect(spending).toMatchObject({ outflow: 0, previousOutflow: 5000 });
+    expect(spending?.categories).toEqual([
+      expect.objectContaining({ name: "Groceries", outflow: 0, count: 0, previousOutflow: 5000 }),
+    ]);
+    // The period total is still the period's own spend.
+    expect(total).toBe(0);
+  });
+
+  it("cuts a running period at today, so both sides of the comparison span the same days", () => {
+    // April 9th: the 12'000 Coop purchase on the 10th has not happened yet.
+    const { groups, total } = getSpendingByGroup("2026-04", makeDb(), new Date("2026-04-09T12:00:00Z"));
+
+    expect(total).toBe(1000 + 3000);
+    expect(groups.find((g) => g.name === "Spending")?.outflow).toBe(1000);
+  });
+});
+
+describe("getLargestTransactions", () => {
+  it("returns outflows by magnitude with category and account names", () => {
+    const { rows, currency } = getLargestTransactions("2026-04", 8, makeDb());
+
+    expect(currency).toBe("CHF");
+    expect(rows.map((r) => [r.payee, r.amount])).toEqual([
+      ["Coop", 12000],
+      ["Cinema", 3000],
+      ["(no payee)", 1000],
+    ]);
+    expect(rows[0]).toMatchObject({
+      date: "2026-04-10",
+      categoryName: "Groceries",
+      accountName: "Credit",
+    });
+  });
+
+  it("excludes payment categories, transfers, inflows and tracking accounts", () => {
+    const { rows } = getLargestTransactions("2026-04", 8, makeDb());
+    // The -12000 card payment (payment category) would otherwise tie for first.
+    expect(rows.some((r) => r.categoryName === "CC Payment")).toBe(false);
+    expect(rows.some((r) => r.payee === "Transfer")).toBe(false);
+    expect(rows.every((r) => r.amount > 0)).toBe(true);
+  });
+
+  it("honours the limit", () => {
+    expect(getLargestTransactions("all", 2, makeDb()).rows.map((r) => r.amount)).toEqual([150000, 50000]);
+  });
+
+  it("cuts a running period at today, like the totals above it", () => {
+    const { rows } = getLargestTransactions("2026-04", 8, makeDb(), new Date("2026-04-09T12:00:00Z"));
+    // The 12'000 Coop purchase is dated the 10th — still in the future.
+    expect(rows.map((r) => [r.payee, r.amount])).toEqual([
+      ["Cinema", 3000],
+      ["(no payee)", 1000],
+    ]);
+  });
+});
+
+describe("getCategoryOutflowBetween", () => {
+  it("sums one category's outflow over a day range", () => {
+    // Groceries: 8000 (Jan 10) + 5000 (Feb 8) + 1000 + 12000 (April).
+    expect(getCategoryOutflowBetween(GROCERIES, "2026-01-01", "2026-03-01", makeDb())).toBe(13000);
+    // Month-to-date fairness: a cut range stops mid-month.
+    expect(getCategoryOutflowBetween(GROCERIES, "2026-04-01", "2026-04-09", makeDb())).toBe(1000);
+  });
+
+  it("treats null bounds as unbounded", () => {
+    expect(getCategoryOutflowBetween(GROCERIES, null, null, makeDb())).toBe(26000);
+  });
+
+  it("excludes uncategorized rows and transfer legs in all-categories mode", () => {
+    // February holds a 20000 transfer pair plus 5000 of groceries.
+    expect(getCategoryOutflowBetween(null, "2026-02-01", "2026-03-01", makeDb())).toBe(5000);
+  });
+
+  it("includes a categorized transfer leg for a single category (getCategoryStats' ledger view)", () => {
+    // The April card payment is a categorized row on the payment category; a
+    // single-category query is a ledger of that category, so it counts.
+    expect(getCategoryOutflowBetween(CC_PAYMENT, "2026-04-01", "2026-05-01", makeDb())).toBe(12000);
+  });
+
+  it("returns 0 for a range with no rows", () => {
+    expect(getCategoryOutflowBetween(GROCERIES, "2026-03-01", "2026-04-01", makeDb())).toBe(0);
   });
 });

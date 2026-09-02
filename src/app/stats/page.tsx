@@ -8,31 +8,48 @@ import { LineChart } from "@/components/charts/line-chart";
 import { CHART_COLORS } from "@/components/charts/theme";
 import { PeriodNav } from "@/components/period-nav";
 import { formatCurrency, formatCurrencyWhole } from "@/lib/currency";
+import { getPayeeIconMap } from "@/lib/payee-icons";
 import {
+  comparisonLabel,
+  comparisonPeriod,
   monthAxisLabel,
-  monthShortLabel,
+  monthKeyOf,
   parseStatsPeriod,
   periodMode,
   statsPeriodLabel,
   type StatsPeriod,
 } from "@/lib/stats-period";
 import {
+  delta,
+  getLargestTransactions,
   getMonthlyCashflow,
   getNetWorthHistory,
   getSpendingByGroup,
   getTopPayees,
-  type NetWorthPoint,
+  netWorthAt,
 } from "@/lib/stats-queries";
-import { cn } from "@/lib/utils";
-import { StatsTabs } from "./tabs";
-import { buildPeriodNav, EmptyNote, SectionHeading, StatsHeader, Tile } from "./ui";
+import { LargestTransactions } from "./largest-transactions";
+import { SpendingGroups } from "./spending-groups";
+import { buildPeriodNav, EmptyNote, Section, StatsPage, StatTile, type StatDelta } from "./ui";
 
 export const metadata: Metadata = { title: "Stats · budget" };
 
 const TOP_PAYEE_LIMIT = 10;
+const LARGEST_LIMIT = 8;
+/** How many net-worth points the tile's sparkline shows. */
+const NET_WORTH_SPARK_MONTHS = 12;
 
 function overviewHref(period: StatsPeriod): string {
   return `/stats?period=${period}`;
+}
+
+/** 0.184 -> "18%", null -> "—". */
+function formatRate(rate: number | null): string {
+  return rate == null ? "—" : `${Math.round(rate * 100)}%`;
+}
+
+function signClass(value: number): string {
+  return value > 0 ? "text-emerald-600" : value < 0 ? "text-red-600" : "";
 }
 
 export default async function StatsOverviewPage({
@@ -53,187 +70,180 @@ export default async function StatsOverviewPage({
 
   const netWorth = getNetWorthHistory(db, now);
   const cashflow = getMonthlyCashflow(period, db, now);
-  const spending = getSpendingByGroup(period, db);
+  const spending = getSpendingByGroup(period, db, now);
   const payees = getTopPayees(period, TOP_PAYEE_LIMIT, db);
-
-  const nav = buildPeriodNav(period, now, overviewHref);
+  const largest = getLargestTransactions(period, LARGEST_LIMIT, db, now);
+  const payeeIcons = getPayeeIconMap(db);
 
   if (netWorth.points.length === 0) {
     return (
-      <div className="flex flex-1 flex-col">
-        <StatsHeader icon={<BarChart3 className="size-5 text-muted-foreground" />} title="Stats" />
-        <StatsTabs active="overview" period={period} />
-        <div className="px-4 py-4">
-          <EmptyStatePanel />
-        </div>
-      </div>
+      <StatsPage active="overview" period={period}>
+        <EmptyStatePanel />
+      </StatsPage>
     );
   }
 
+  const nav = buildPeriodNav(period, now, overviewHref);
+  const { currency } = cashflow;
+  const previous = cashflow.previous;
+  const compareLabel = comparisonLabel(period, now);
+  const mode = periodMode(period);
+
+  // A comparison needs both a previous total and a label for it; "all time" has
+  // neither, and then the per-month average is the honest thing to show instead.
+  const makeDelta = (
+    current: number,
+    prev: number | undefined,
+    tone: StatDelta["tone"]
+  ): StatDelta | null => {
+    if (prev == null || compareLabel == null) return null;
+    const d = delta(current, prev);
+    return { change: d.change, percent: d.percent, currency, label: compareLabel, tone };
+  };
+
+  // The cashflow query already counts the months it summed, so the per-month
+  // hints divide by that rather than by the length of an unrelated series.
+  const perMonth = (total: number) =>
+    cashflow.months > 0 ? `${formatCurrencyWhole(Math.round(total / cashflow.months), currency)} / mo` : undefined;
+
+  const soFar = mode === "year" ? "so far this year" : "so far this month";
+  const flowHint = (total: number) =>
+    cashflow.partial ? soFar : previous == null ? perMonth(total) : undefined;
+
+  // Net worth is a stock, not a flow: the tile shows the balance as it stood at
+  // the END of the selected period (not today's, which would sit above a delta
+  // measured somewhere else entirely), and compares it against the balance at
+  // the end of the comparison period's last month rather than against a sum.
+  const latestMonth = netWorth.points[netWorth.points.length - 1].month;
+  const nowMonth = monthKeyOf(now);
+  const periodEndMonth =
+    mode === "all" ? latestMonth : mode === "year" ? (period === nowMonth.slice(0, 4) ? nowMonth : `${period}-12`) : period;
+  const currentNetWorth =
+    netWorthAt(netWorth.points, periodEndMonth) ?? netWorth.points[netWorth.points.length - 1].balance;
+  const netWorthSpark = netWorth.points
+    .filter((point) => point.month <= periodEndMonth)
+    .slice(-NET_WORTH_SPARK_MONTHS)
+    .map((point) => point.balance);
+  const comparison = comparisonPeriod(period);
+  const comparisonEndMonth = comparison == null ? null : mode === "year" ? `${comparison}-12` : comparison;
+  const previousNetWorth =
+    comparisonEndMonth == null ? null : netWorthAt(netWorth.points, comparisonEndMonth);
+
   return (
-    <div className="flex flex-1 flex-col">
-      <StatsHeader icon={<BarChart3 className="size-5 text-muted-foreground" />} title="Stats" />
-      <StatsTabs active="overview" period={period} />
-
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-        <PeriodNav {...nav} />
-      </div>
-
-      <div className="flex flex-col gap-6 px-4 py-4">
-        <NetWorthSection
-          points={netWorth.points}
-          currency={netWorth.currency}
-          liveValuation={netWorth.liveValuation}
-          period={period}
-        />
+    <StatsPage active="overview" period={period} controls={<PeriodNav {...nav} />}>
+      <div className="flex flex-col gap-6">
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <StatTile
+            label="Spending"
+            value={formatCurrencyWhole(cashflow.spending, currency)}
+            delta={makeDelta(cashflow.spending, previous?.spending, "down-good")}
+            hint={
+              cashflow.partial
+                ? soFar
+                : previous == null
+                  ? `${formatCurrencyWhole(cashflow.avgSpendingPerMonth, currency)} / mo`
+                  : undefined
+            }
+            sparkline={cashflow.trailing.spending}
+          />
+          <StatTile
+            label="Income"
+            value={formatCurrencyWhole(cashflow.income, currency)}
+            delta={makeDelta(cashflow.income, previous?.income, "up-good")}
+            hint={flowHint(cashflow.income)}
+            sparkline={cashflow.trailing.income}
+          />
+          <StatTile
+            label="Net"
+            value={formatCurrencyWhole(cashflow.net, currency)}
+            valueClassName={signClass(cashflow.net)}
+            delta={makeDelta(cashflow.net, previous?.net, "up-good")}
+            hint={
+              cashflow.savingsRate == null
+                ? "no income"
+                : `savings rate ${formatRate(cashflow.savingsRate)}`
+            }
+            sparkline={cashflow.trailing.net}
+          />
+          <StatTile
+            label="Net worth"
+            value={formatCurrencyWhole(currentNetWorth, currency)}
+            delta={
+              previousNetWorth == null
+                ? null
+                : makeDelta(currentNetWorth, previousNetWorth, "neutral")
+            }
+            hint={netWorth.liveValuation ? "investments at latest price" : undefined}
+            sparkline={netWorthSpark}
+          />
+        </div>
 
         <CashflowSection cashflow={cashflow} period={period} />
 
         <div className="grid gap-6 lg:grid-cols-2">
-          <section>
-            <SectionHeading>Spending by group</SectionHeading>
+          <Section
+            title="Spending by group"
+            caption={spending.total > 0 ? formatCurrency(spending.total, spending.currency) : undefined}
+          >
             {spending.groups.length === 0 ? (
-              <EmptyNote>No spending in {statsPeriodLabel(period).toLowerCase()}.</EmptyNote>
+              <EmptyNote>No spending in {statsPeriodLabel(period)}.</EmptyNote>
             ) : (
-              <BarList
-                items={spending.groups.map((group) => ({
-                  key: String(group.groupId),
-                  label: group.name,
-                  value: group.outflow,
-                  hint: `${formatShare(group.share)} · ${group.count}×`,
-                }))}
-                formatValue={(value) => formatCurrency(value, spending.currency)}
-                colorClassName="bg-red-600/70"
+              <SpendingGroups
+                groups={spending.groups}
+                currency={spending.currency}
+                period={period}
+                comparisonLabel={compareLabel}
               />
             )}
-          </section>
+          </Section>
 
-          <section>
-            <SectionHeading>Top payees</SectionHeading>
-            {payees.length === 0 ? (
-              <EmptyNote>No payees with spending in {statsPeriodLabel(period).toLowerCase()}.</EmptyNote>
+          <Section title="Largest transactions">
+            {largest.rows.length === 0 ? (
+              <EmptyNote>No purchases in {statsPeriodLabel(period)}.</EmptyNote>
             ) : (
-              <BarList
-                items={payees.map((payee, index) => ({
-                  key: `${index}-${payee.payee}`,
-                  label: payee.payee,
-                  value: payee.outflow,
-                  hint: `${payee.count}×`,
-                }))}
-                formatValue={(value) => formatCurrency(value, cashflow.currency)}
+              <LargestTransactions
+                rows={largest.rows}
+                currency={largest.currency}
+                iconUrls={payeeIcons}
               />
             )}
-          </section>
+          </Section>
         </div>
-      </div>
-    </div>
-  );
-}
 
-/** 0.184 -> "18%". */
-function formatShare(share: number): string {
-  return `${Math.round(share * 100)}%`;
-}
-
-/** 0.184 -> "18%", null -> "—". */
-function formatRate(rate: number | null): string {
-  return rate == null ? "—" : `${Math.round(rate * 100)}%`;
-}
-
-function signClass(value: number): string {
-  return value > 0 ? "text-emerald-600" : value < 0 ? "text-red-600" : "";
-}
-
-/**
- * Net-worth movement across the selected period: the last point inside the
- * period against the point just before it (0 when the period opens the
- * history — net worth genuinely started at nothing). Falls back to the last 12
- * points when the period holds no data at all, so the hero always says
- * something true.
- */
-function netWorthChange(
-  points: NetWorthPoint[],
-  period: StatsPeriod
-): { delta: number; caption: string } | null {
-  if (points.length < 2) return null;
-  const mode = periodMode(period);
-
-  if (mode === "all") {
-    return {
-      delta: points[points.length - 1].balance - points[0].balance,
-      caption: `since ${monthShortLabel(points[0].month)}`,
-    };
-  }
-
-  const matches = (month: string) => (mode === "month" ? month === period : month.slice(0, 4) === period);
-  const firstIndex = points.findIndex((p) => matches(p.month));
-
-  if (firstIndex === -1) {
-    const baseIndex = Math.max(0, points.length - 13);
-    const months = points.length - 1 - baseIndex;
-    return {
-      delta: points[points.length - 1].balance - points[baseIndex].balance,
-      caption: months === 1 ? "over the last month" : `over the last ${months} months`,
-    };
-  }
-
-  let lastIndex = firstIndex;
-  while (lastIndex + 1 < points.length && matches(points[lastIndex + 1].month)) lastIndex++;
-  const baseline = firstIndex > 0 ? points[firstIndex - 1].balance : 0;
-
-  return {
-    delta: points[lastIndex].balance - baseline,
-    caption: `over ${statsPeriodLabel(period)}`,
-  };
-}
-
-function NetWorthSection({
-  points,
-  currency,
-  liveValuation,
-  period,
-}: {
-  points: NetWorthPoint[];
-  currency: string;
-  liveValuation: boolean;
-  period: StatsPeriod;
-}) {
-  const current = points[points.length - 1].balance;
-  const change = netWorthChange(points, period);
-
-  return (
-    <section>
-      <SectionHeading>Net worth</SectionHeading>
-      <div className="rounded-lg border border-border p-3">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span className="text-3xl font-semibold tabular-nums">{formatCurrency(current, currency)}</span>
-          {change != null && (
-            <span className={cn("text-sm font-medium tabular-nums", signClass(change.delta))}>
-              {change.delta >= 0 ? "+" : "−"}
-              {formatCurrency(Math.abs(change.delta), currency)}
-              <span className="ml-1 font-normal text-muted-foreground">{change.caption}</span>
-            </span>
+        <Section title="Top payees">
+          {payees.length === 0 ? (
+            <EmptyNote>No payees with spending in {statsPeriodLabel(period)}.</EmptyNote>
+          ) : (
+            <BarList
+              items={payees.map((payee, index) => ({
+                key: `${index}-${payee.payee}`,
+                label: payee.payee,
+                value: payee.outflow,
+                hint: `${payee.count}×`,
+              }))}
+              formatValue={(value) => formatCurrency(value, currency)}
+            />
           )}
-        </div>
+        </Section>
 
-        <LineChart
-          className="mt-3"
-          points={points.map((point) => ({
-            key: point.month,
-            label: monthAxisLabel(point.month),
-            value: point.balance,
-          }))}
-          title="Net worth over time"
-          formatValue={(value) => formatCurrencyWhole(value, currency)}
-          height={200}
-        />
-
-        <p className="mt-2 text-xs text-muted-foreground">
-          Always the full history, not the selected period.
-          {liveValuation && " Investments are marked to their latest cached price."}
-        </p>
+        <Section title="Net worth">
+          <LineChart
+            points={netWorth.points.map((point) => ({
+              key: point.month,
+              label: monthAxisLabel(point.month),
+              value: point.balance,
+            }))}
+            title="Net worth over time"
+            currency={netWorth.currency}
+            height={200}
+          />
+          <p className="mt-2 text-xs text-muted-foreground">
+            Always the full history, not the selected period.
+            {netWorth.liveValuation && " Investments are marked to their latest cached price."}
+          </p>
+        </Section>
       </div>
-    </section>
+    </StatsPage>
   );
 }
 
@@ -247,50 +257,37 @@ function CashflowSection({
   const { currency } = cashflow;
   const hasActivity = cashflow.entries.some((entry) => entry.income > 0 || entry.spending > 0);
 
+  const bars = cashflow.entries.map((entry) => ({
+    key: entry.key,
+    label: entry.label,
+    values: [entry.income, entry.spending],
+    muted: !entry.inPeriod,
+  }));
+  const series = [
+    { name: "Income", color: CHART_COLORS.income },
+    { name: "Spending", color: CHART_COLORS.spending },
+  ];
+  const title = cashflow.bucket === "year" ? "Income vs spending per year" : "Income vs spending per month";
+
   return (
-    <section>
-      <SectionHeading>Income vs spending</SectionHeading>
-
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-        <Tile label="Income" value={formatCurrency(cashflow.income, currency)} />
-        <Tile label="Spending" value={formatCurrency(cashflow.spending, currency)} />
-        <Tile
-          label="Net"
-          value={formatCurrency(cashflow.net, currency)}
-          valueClassName={signClass(cashflow.net)}
-        />
-        <Tile
-          label="Savings rate"
-          value={formatRate(cashflow.savingsRate)}
-          hint={cashflow.savingsRate == null ? "no income" : undefined}
-          valueClassName={cashflow.savingsRate == null ? "" : signClass(cashflow.savingsRate)}
-        />
-        <Tile
-          label="Avg spending / mo"
-          value={formatCurrency(cashflow.avgSpendingPerMonth, currency)}
-          hint={statsPeriodLabel(period)}
-        />
-      </div>
-
+    <Section title="Income vs spending">
       {hasActivity ? (
-        <GroupedBarChart
-          className="mt-3"
-          bars={cashflow.entries.map((entry) => ({
-            key: entry.key,
-            label: entry.label,
-            values: [entry.income, entry.spending],
-            muted: !entry.inPeriod,
-          }))}
-          series={[
-            { name: "Income", color: CHART_COLORS.income },
-            { name: "Spending", color: CHART_COLORS.spending },
-          ]}
-          title={cashflow.bucket === "year" ? "Income vs spending per year" : "Income vs spending per month"}
-          formatValue={(value) => formatCurrencyWhole(value, currency)}
-          height={220}
-        />
+        <>
+          {/* One chart, two heights: a 220px plot eats too much of a phone
+              screen. ChartFrame measures its rendered CSS height, so the
+              breakpoint lives in the class list; `height` is the fallback
+              used before the first measurement. */}
+          <GroupedBarChart
+            className="h-45 sm:h-55"
+            bars={bars}
+            series={series}
+            title={title}
+            currency={currency}
+            height={220}
+          />
+        </>
       ) : (
-        <EmptyNote className="mt-3">No income or spending in {statsPeriodLabel(period).toLowerCase()}.</EmptyNote>
+        <EmptyNote>No income or spending in {statsPeriodLabel(period)}.</EmptyNote>
       )}
 
       {cashflow.entries.some((entry) => !entry.inPeriod) && (
@@ -298,7 +295,7 @@ function CashflowSection({
           Faded months are context around {statsPeriodLabel(period)}.
         </p>
       )}
-    </section>
+    </Section>
   );
 }
 

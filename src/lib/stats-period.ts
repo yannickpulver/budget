@@ -149,3 +149,127 @@ export function monthSpan(from: string, to: string): number {
   const [ty, tm] = to.split("-").map(Number);
   return (ty - fy) * 12 + (tm - fm) + 1;
 }
+
+// ---------------------------------------------------------------------------
+// Period comparison ("vs last month / vs last year")
+// ---------------------------------------------------------------------------
+
+/** Days in a 1-based (year, month). */
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/** YYYY-MM-DD for a UTC-safe (year, month 1-based, day) triple, rolling over month/year ends. */
+function isoDate(year: number, month: number, day: number): string {
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * The period to compare against: month -> previous month, year -> previous
+ * year, "all" -> null (all time has nothing before it).
+ */
+export function comparisonPeriod(period: StatsPeriod): StatsPeriod | null {
+  const mode = periodMode(period);
+  if (mode === "all") return null;
+  if (mode === "year") return String(Number(period) - 1);
+  return monthKeyShift(period, -1);
+}
+
+/**
+ * True when `period` is the running month or year — its numbers are still
+ * moving, so a comparison against a *complete* earlier period would be unfair.
+ * "all" is never treated as current (it has no comparison at all).
+ */
+export function isCurrentPeriod(period: StatsPeriod, now: Date = new Date()): boolean {
+  const mode = periodMode(period);
+  if (mode === "all") return false;
+  if (mode === "year") return Number(period) === now.getFullYear();
+  return period === monthKeyOf(now);
+}
+
+/**
+ * Half-open date bounds [start, end) for the comparison period, aligned for
+ * month-to-date fairness.
+ *
+ * When `period` is the current month (per `now`), the previous month is cut at
+ * the same day-of-month — clamped to that month's length, so "March so far" on
+ * the 31st compares against the whole of February rather than nothing — and
+ * the cut day is INCLUDED, matching the running period, which includes today.
+ * The same logic applies a level up for the current year: the previous year is
+ * cut at the same month+day.
+ *
+ * A period that is already over compares against the complete previous period
+ * (`partial: false`). "all" has no comparison and returns null.
+ */
+export function comparisonBounds(
+  period: StatsPeriod,
+  now: Date = new Date()
+): { start: string; end: string; partial: boolean } | null {
+  const mode = periodMode(period);
+  if (mode === "all") return null;
+  const running = isCurrentPeriod(period, now);
+
+  if (mode === "year") {
+    const prevYear = Number(period) - 1;
+    const start = `${prevYear}-01-01`;
+    if (!running) return { start, end: `${prevYear + 1}-01-01`, partial: false };
+    const month = now.getMonth() + 1;
+    const day = Math.min(now.getDate(), daysInMonth(prevYear, month));
+    return { start, end: isoDate(prevYear, month, day + 1), partial: true };
+  }
+
+  const prev = monthKeyShift(period, -1);
+  const [py, pm] = prev.split("-").map(Number);
+  const start = `${prev}-01`;
+  if (!running) return { start, end: statsPeriodBounds(period).start as string, partial: false };
+  const day = Math.min(now.getDate(), daysInMonth(py, pm));
+  return { start, end: isoDate(py, pm, day + 1), partial: true };
+}
+
+/**
+ * Half-open date bounds [start, end) for the period ITSELF, cut the same way
+ * `comparisonBounds` cuts the comparison window.
+ *
+ * `statsPeriodBounds` gives the full calendar month/year, which is right for a
+ * period that is over. While a period is still running, though, its full
+ * bounds reach past today — and pairing a full-month current total with a
+ * day-cut comparison total is a one-sided comparison that flatters or
+ * punishes the running period for nothing (and lets a future-dated
+ * transaction leak into "so far"). So a running period ends at today+1
+ * (exclusive), matching `comparisonBounds`' cut day, which is inclusive.
+ *
+ * `partial` is true exactly when that cut was applied. "all" has no bounds
+ * and returns null.
+ */
+export function currentBounds(
+  period: StatsPeriod,
+  now: Date = new Date()
+): { start: string; end: string; partial: boolean } | null {
+  const mode = periodMode(period);
+  if (mode === "all") return null;
+  const { start, end } = statsPeriodBounds(period);
+  if (!isCurrentPeriod(period, now)) {
+    return { start: start as string, end: end as string, partial: false };
+  }
+  return {
+    start: start as string,
+    end: isoDate(now.getFullYear(), now.getMonth() + 1, now.getDate() + 1),
+    partial: true,
+  };
+}
+
+/**
+ * Short label for the comparison shown next to a delta: "vs Jul", "vs 2025",
+ * or "vs Jul so far" when the comparison window is cut short to match a
+ * running period. Null for "all".
+ */
+export function comparisonLabel(period: StatsPeriod, now: Date = new Date()): string | null {
+  const previous = comparisonPeriod(period);
+  if (previous == null) return null;
+  const bounds = comparisonBounds(period, now);
+  const suffix = bounds?.partial ? " so far" : "";
+  if (periodMode(period) === "year") return `vs ${previous}${suffix}`;
+  const month = Number(previous.split("-")[1]);
+  return `vs ${MONTH_SHORT_NAMES[month - 1]}${suffix}`;
+}

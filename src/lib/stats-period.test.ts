@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  comparisonBounds,
+  comparisonLabel,
+  comparisonPeriod,
+  currentBounds,
   currentPeriod,
+  isCurrentPeriod,
   monthAxisLabel,
   monthKeyOf,
   monthKeyShift,
@@ -183,5 +188,144 @@ describe("monthKeyOf", () => {
   it("formats a Date as YYYY-MM", () => {
     expect(monthKeyOf(NOW)).toBe("2026-08");
     expect(monthKeyOf(new Date("2026-01-15T12:00:00Z"))).toBe("2026-01");
+  });
+});
+
+describe("comparisonPeriod", () => {
+  it("maps a month to the previous month and a year to the previous year", () => {
+    expect(comparisonPeriod("2026-08")).toBe("2026-07");
+    expect(comparisonPeriod("2026-01")).toBe("2025-12");
+    expect(comparisonPeriod("2026")).toBe("2025");
+  });
+
+  it("has nothing to compare all time against", () => {
+    expect(comparisonPeriod("all")).toBeNull();
+  });
+});
+
+describe("isCurrentPeriod", () => {
+  it("is true for the running month and year only", () => {
+    expect(isCurrentPeriod("2026-08", NOW)).toBe(true);
+    expect(isCurrentPeriod("2026-07", NOW)).toBe(false);
+    expect(isCurrentPeriod("2026", NOW)).toBe(true);
+    expect(isCurrentPeriod("2025", NOW)).toBe(false);
+    expect(isCurrentPeriod("all", NOW)).toBe(false);
+  });
+});
+
+describe("comparisonBounds", () => {
+  it("cuts the previous month at the same day for a running month (month-to-date fairness)", () => {
+    // NOW is 2026-08-06, so August-so-far covers days 1..6; the previous
+    // month is cut the same way (end is exclusive, hence the 7th).
+    expect(comparisonBounds("2026-08", NOW)).toEqual({
+      start: "2026-07-01",
+      end: "2026-07-07",
+      partial: true,
+    });
+  });
+
+  it("uses the whole previous month for a period that is already over", () => {
+    expect(comparisonBounds("2026-07", NOW)).toEqual({
+      start: "2026-06-01",
+      end: "2026-07-01",
+      partial: false,
+    });
+  });
+
+  it("clamps the cut day to the previous month's length (day 31 -> February)", () => {
+    const march31 = new Date("2026-03-31T12:00:00Z");
+    // February 2026 has 28 days, so "March so far" compares against all of it.
+    expect(comparisonBounds("2026-03", march31)).toEqual({
+      start: "2026-02-01",
+      end: "2026-03-01",
+      partial: true,
+    });
+  });
+
+  it("clamps to a leap-year February when the previous year is shorter", () => {
+    const feb29 = new Date("2028-02-29T12:00:00Z");
+    expect(comparisonBounds("2028", feb29)).toEqual({
+      start: "2027-01-01",
+      end: "2027-03-01", // Feb 2027 has 28 days: clamped to the 28th, end exclusive.
+      partial: true,
+    });
+  });
+
+  it("cuts the previous year at the same month+day for a running year", () => {
+    expect(comparisonBounds("2026", NOW)).toEqual({
+      start: "2025-01-01",
+      end: "2025-08-07",
+      partial: true,
+    });
+  });
+
+  it("uses the whole previous year for a past year", () => {
+    expect(comparisonBounds("2025", NOW)).toEqual({
+      start: "2024-01-01",
+      end: "2025-01-01",
+      partial: false,
+    });
+  });
+
+  it("returns null for all time", () => {
+    expect(comparisonBounds("all", NOW)).toBeNull();
+  });
+});
+
+describe("currentBounds", () => {
+  it("cuts a running month at today, so it matches the comparison window", () => {
+    // NOW is 2026-08-06: August-so-far is days 1..6, end exclusive on the 7th
+    // — the same shape `comparisonBounds` gives July.
+    expect(currentBounds("2026-08", NOW)).toEqual({
+      start: "2026-08-01",
+      end: "2026-08-07",
+      partial: true,
+    });
+    expect(currentBounds("2026", NOW)).toEqual({
+      start: "2026-01-01",
+      end: "2026-08-07",
+      partial: true,
+    });
+  });
+
+  it("gives a finished period its full calendar bounds", () => {
+    expect(currentBounds("2026-07", NOW)).toEqual({
+      start: "2026-07-01",
+      end: "2026-08-01",
+      partial: false,
+    });
+    expect(currentBounds("2025", NOW)).toEqual({
+      start: "2025-01-01",
+      end: "2026-01-01",
+      partial: false,
+    });
+  });
+
+  it("rolls over a month end when today is the last day", () => {
+    expect(currentBounds("2026-08", new Date("2026-08-31T12:00:00Z"))).toEqual({
+      start: "2026-08-01",
+      end: "2026-09-01",
+      partial: true,
+    });
+  });
+
+  it("returns null for all time", () => {
+    expect(currentBounds("all", NOW)).toBeNull();
+  });
+});
+
+describe("comparisonLabel", () => {
+  it("labels a finished period against the whole previous one", () => {
+    expect(comparisonLabel("2026-07", NOW)).toBe("vs Jun");
+    expect(comparisonLabel("2025", NOW)).toBe("vs 2024");
+  });
+
+  it("says 'so far' while the period is running", () => {
+    expect(comparisonLabel("2026-08", NOW)).toBe("vs Jul so far");
+    expect(comparisonLabel("2026", NOW)).toBe("vs 2025 so far");
+  });
+
+  it("returns null for all time", () => {
+    expect(comparisonLabel("all", NOW)).toBeNull();
   });
 });

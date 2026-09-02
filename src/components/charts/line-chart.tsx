@@ -1,193 +1,246 @@
+"use client";
+
+import { useId } from "react";
+import { formatCurrency, formatCurrencyWhole } from "@/lib/currency";
+import { ChartEmpty, ChartFrame, yAxisMargin, type FrameRender } from "./chart-frame";
 import { CHART_COLORS, CHART_GEOMETRY, labelCapacity, niceTicks, thinIndices } from "./theme";
 
-const VIEW_WIDTH = 600;
-const MARGIN = { top: 12, right: 8, bottom: 20, left: 52 };
+const MARGIN_TOP = 12;
+const MARGIN_RIGHT = 12;
+const MARGIN_BOTTOM = 20;
 
-/** Lowercase, alphanumeric-and-hyphen only — safe as an SVG id fragment. */
-function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-}
+type Point = { key: string; label: string; value: number };
 
 /**
- * Single-series net-worth line, rendered as static inline SVG (no client JS —
- * this is a server component). A line is the right form here because the
- * job is "trend over time" for one series: sequential/neutral ink, not
- * categorical color, since there's nothing to tell apart.
+ * Single-series line over time, drawn at real pixel size inside `ChartFrame`.
+ * A line is the right form here because the job is "trend over time" for one
+ * series: sequential/neutral ink, not categorical color, since there is
+ * nothing to tell apart.
  *
  * Encoding: a 2px neutral line over a very faint same-hue area wash, 3-4
  * recessive gridlines with currency y-ticks (a zero line falls out of the
- * tick rounding whenever the domain crosses zero), x labels thinned to at
- * most ~6 so they never collide, and a single 8px marker + direct label on
- * the final point (the endpoint is the story; every other point would just
- * be noise). Because there's only one series, no legend box is drawn — the
- * caller's heading already names what's plotted.
+ * tick rounding whenever the domain crosses zero), x labels thinned against
+ * the *measured* plot width so they never collide at any viewport, and a
+ * single 8px marker + direct label on the final point — the endpoint is the
+ * story; a number on every point would just be noise. An optional `ghost`
+ * series (e.g. the previous year) is drawn faint and dashed behind the real
+ * line; it never competes for attention and needs no legend.
  *
- * There is no JS to drive a hover tooltip, so each point carries a native
- * SVG `<title>` inside its own `<g>` — hovering (or focusing, for
- * accessibility tooling that walks the DOM) surfaces the exact value even
- * though nothing here is scripted.
+ * Hovering or tapping anywhere — or the Arrow keys once the frame has focus —
+ * snaps a crosshair to the nearest point and opens the frame's HTML tooltip
+ * with the exact (unrounded) values. Height is CSS-driven: pass a height class
+ * (e.g. `className="h-45 sm:h-55"`); the `height` prop is the pre-measure
+ * fallback and the reserved height when no class sets one.
  */
 export function LineChart(props: {
-  points: { key: string; label: string; value: number }[];
-  /** Accessible name; rendered as the SVG <title>, not visible text. The caller renders its own heading. */
+  points: Point[];
+  /** Accessible name; rendered as the SVG <title>, not visible text. */
   title: string;
-  formatValue: (value: number) => string;
+  currency: string;
   height?: number;
   className?: string;
+  /** Optional second series drawn faint/dashed behind, same x count. */
+  ghost?: { label: string; points: Point[] } | null;
+  /** Direct end-label on the last point. */
+  endLabel?: boolean;
+  /** Axis/end-label rounding. Tooltips are always exact. */
+  valueFormat?: "exact" | "whole";
 }) {
-  const { points, title, formatValue, height = 180, className } = props;
-  const plotWidth = VIEW_WIDTH - MARGIN.left - MARGIN.right;
-  const plotHeight = height - MARGIN.top - MARGIN.bottom;
-  const viewBox = `0 0 ${VIEW_WIDTH} ${height}`;
+  const { points, title, currency, height = 200, className, ghost = null, endLabel = true, valueFormat = "whole" } = props;
+  const formatAxis = (value: number) =>
+    valueFormat === "exact" ? formatCurrency(value, currency) : formatCurrencyWhole(value, currency);
+  const gradientId = `line-area-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
 
-  if (points.length < 2) {
-    return (
-      <svg viewBox={viewBox} width="100%" height={height} preserveAspectRatio="xMidYMid meet" className={className} role="img">
-        <title>{title}</title>
-        <text
-          x={VIEW_WIDTH / 2}
-          y={height / 2}
-          textAnchor="middle"
-          dominantBaseline="middle"
-          fontSize={CHART_GEOMETRY.tickFontSize}
-          fill={CHART_GEOMETRY.axisInk}
-        >
-          Not enough data yet
-        </text>
-      </svg>
-    );
-  }
+  if (points.length < 2) return <ChartEmpty height={height} className={className} />;
 
+  const ghostPoints = ghost && ghost.points.length === points.length ? ghost.points : null;
   const values = points.map((p) => p.value);
+  if (ghostPoints) values.push(...ghostPoints.map((p) => p.value));
   const { niceMin, niceMax, ticks } = niceTicks(Math.min(...values), Math.max(...values), 4);
   const span = niceMax - niceMin || 1;
 
-  const xAt = (index: number) => MARGIN.left + (index / (points.length - 1)) * plotWidth;
-  const yAt = (value: number) => MARGIN.top + plotHeight - ((value - niceMin) / span) * plotHeight;
+  const tickLabels = ticks.map(formatAxis);
+  const marginLeft = yAxisMargin(tickLabels);
 
-  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(2)},${yAt(p.value).toFixed(2)}`).join(" ");
-  const baselineY = MARGIN.top + plotHeight;
-  const areaPath = `${linePath} L${xAt(points.length - 1).toFixed(2)},${baselineY.toFixed(2)} L${xAt(0).toFixed(2)},${baselineY.toFixed(2)} Z`;
+  const render = (width: number, frameHeight: number): FrameRender => {
+    const plotWidth = Math.max(1, width - marginLeft - MARGIN_RIGHT);
+    const plotHeight = Math.max(1, frameHeight - MARGIN_TOP - MARGIN_BOTTOM);
+    const baselineY = MARGIN_TOP + plotHeight;
 
-  const shownLabels = thinIndices(points.length, labelCapacity(plotWidth));
-  const labelIndices = new Set(shownLabels);
-  const labelOrdinal = new Map(shownLabels.map((index, ordinal) => [index, ordinal]));
-  const last = points[points.length - 1];
-  const lastX = xAt(points.length - 1);
-  const lastY = yAt(last.value);
-  // Derived from `title` (not useId — this is a server component) so two
-  // LineCharts on one page never collide over the same <linearGradient> id.
-  const gradientId = `line-chart-area-fill-${slugify(title)}`;
+    const xAt = (index: number) => marginLeft + (index / (points.length - 1)) * plotWidth;
+    const yAt = (value: number) => MARGIN_TOP + plotHeight - ((value - niceMin) / span) * plotHeight;
 
-  return (
-    <svg viewBox={viewBox} width="100%" height={height} preserveAspectRatio="xMidYMid meet" className={className} role="img">
-      <title>{title}</title>
-      <defs>
-        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={CHART_COLORS.neutral} stopOpacity={CHART_GEOMETRY.areaFillOpacity} />
-          <stop offset="100%" stopColor={CHART_COLORS.neutral} stopOpacity={0} />
-        </linearGradient>
-      </defs>
+    const pathFor = (series: Point[]) =>
+      series.map((p, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(2)},${yAt(p.value).toFixed(2)}`).join(" ");
 
-      {/* Gridlines + currency y-ticks. The tick nearest 0, if in range, doubles as the zero line. */}
-      <g>
-        {ticks.map((tick) => {
-          const y = yAt(tick);
-          return (
-            <g key={tick}>
-              <line
-                x1={MARGIN.left}
-                x2={VIEW_WIDTH - MARGIN.right}
-                y1={y}
-                y2={y}
-                stroke={CHART_GEOMETRY.gridStroke}
-                strokeWidth={CHART_GEOMETRY.gridStrokeWidth}
-              />
+    const linePath = pathFor(points);
+    const areaPath = `${linePath} L${xAt(points.length - 1).toFixed(2)},${baselineY.toFixed(2)} L${xAt(0).toFixed(2)},${baselineY.toFixed(2)} Z`;
+
+    const labelIndices = new Set(thinIndices(points.length, labelCapacity(plotWidth)));
+    const lastIndex = points.length - 1;
+    const last = points[lastIndex];
+
+    const content = (
+      <>
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={CHART_COLORS.neutral} stopOpacity={CHART_GEOMETRY.areaFillOpacity} />
+            <stop offset="100%" stopColor={CHART_COLORS.neutral} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+
+        {/* Gridlines + currency y-ticks. The tick nearest 0, if in range, doubles as the zero line. */}
+        <g>
+          {ticks.map((tick, i) => {
+            const y = yAt(tick);
+            return (
+              <g key={tick}>
+                <line
+                  x1={marginLeft}
+                  x2={width - MARGIN_RIGHT}
+                  y1={y}
+                  y2={y}
+                  stroke={CHART_GEOMETRY.gridStroke}
+                  strokeWidth={CHART_GEOMETRY.gridStrokeWidth}
+                />
+                <text
+                  x={marginLeft - 8}
+                  y={y}
+                  textAnchor="end"
+                  dominantBaseline="middle"
+                  fontSize={CHART_GEOMETRY.tickFontSize}
+                  fill={CHART_GEOMETRY.axisInk}
+                >
+                  {tickLabels[i]}
+                </text>
+              </g>
+            );
+          })}
+        </g>
+
+        {/* Area wash beneath the line — a hint of magnitude, never a saturated block. */}
+        <path d={areaPath} fill={`url(#${gradientId})`} stroke="none" />
+
+        {/* Comparison series, deliberately recessive: faint, dashed, behind. */}
+        {ghostPoints && (
+          <path
+            d={pathFor(ghostPoints)}
+            fill="none"
+            stroke={CHART_COLORS.neutral}
+            strokeOpacity={0.3}
+            strokeWidth={CHART_GEOMETRY.lineStrokeWidth - 0.5}
+            strokeDasharray="4 3"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        )}
+
+        <path
+          d={linePath}
+          fill="none"
+          stroke={CHART_COLORS.neutral}
+          strokeWidth={CHART_GEOMETRY.lineStrokeWidth}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+
+        {/* End marker + direct label — the endpoint is the one value worth calling out. */}
+        <g>
+          <circle
+            cx={xAt(lastIndex)}
+            cy={yAt(last.value)}
+            r={CHART_GEOMETRY.markerDiameter / 2}
+            fill={CHART_COLORS.neutral}
+            stroke="var(--background)"
+            strokeWidth={2}
+          />
+          {endLabel && (
+            <text
+              x={Math.min(xAt(lastIndex), width - MARGIN_RIGHT)}
+              y={Math.max(11, yAt(last.value) - 10)}
+              textAnchor="end"
+              fontSize={CHART_GEOMETRY.tickFontSize + 1}
+              fontWeight={600}
+              fill="var(--foreground)"
+            >
+              {formatAxis(last.value)}
+            </text>
+          )}
+        </g>
+
+        {/* X labels, thinned against the real plot width so they never collide. */}
+        <g>
+          {points.map((p, i) => {
+            if (!labelIndices.has(i)) return null;
+            return (
               <text
-                x={MARGIN.left - 8}
-                y={y}
-                textAnchor="end"
-                dominantBaseline="middle"
+                key={p.key}
+                x={xAt(i)}
+                y={frameHeight - 4}
+                textAnchor={i === 0 ? "start" : i === lastIndex ? "end" : "middle"}
                 fontSize={CHART_GEOMETRY.tickFontSize}
                 fill={CHART_GEOMETRY.axisInk}
               >
-                {formatValue(tick)}
+                {p.label}
               </text>
-            </g>
-          );
-        })}
-      </g>
-
-      {/* Area wash beneath the line — a hint of magnitude, never a saturated block. */}
-      <path d={areaPath} fill={`url(#${gradientId})`} stroke="none" />
-
-      {/* The line itself. */}
-      <path
-        d={linePath}
-        fill="none"
-        stroke={CHART_COLORS.neutral}
-        strokeWidth={CHART_GEOMETRY.lineStrokeWidth}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-
-      {/* Per-point hover targets: invisible, larger than the visible marks, each with a native tooltip. */}
-      {points.map((p, i) => (
-        <g key={p.key}>
-          <title>{`${p.label}: ${formatValue(p.value)}`}</title>
-          <circle cx={xAt(i)} cy={yAt(p.value)} r={10} fill="transparent" />
+            );
+          })}
         </g>
-      ))}
+      </>
+    );
 
-      {/* End marker + direct label — the endpoint is the one value worth calling out. */}
-      <g>
-        <circle
-          cx={lastX}
-          cy={lastY}
-          r={CHART_GEOMETRY.markerDiameter / 2}
-          fill={CHART_COLORS.neutral}
-          stroke="var(--background)"
-          strokeWidth={2}
-        />
-        <text
-          x={Math.min(lastX, VIEW_WIDTH - MARGIN.right - 4)}
-          y={lastY - 10}
-          textAnchor="end"
-          fontSize={CHART_GEOMETRY.tickFontSize + 1}
-          fontWeight={600}
-          fill="var(--foreground)"
-          className="chart-callout"
-        >
-          {formatValue(last.value)}
-        </text>
-      </g>
+    return {
+      content,
+      slotCenters: points.map((_, i) => xAt(i)),
+      activeMark: (index) => (
+        <g pointerEvents="none">
+          <line
+            x1={xAt(index)}
+            x2={xAt(index)}
+            y1={MARGIN_TOP}
+            y2={baselineY}
+            stroke={CHART_GEOMETRY.axisInk}
+            strokeWidth={1}
+            strokeDasharray="3 3"
+          />
+          <circle
+            cx={xAt(index)}
+            cy={yAt(points[index].value)}
+            r={CHART_GEOMETRY.markerDiameter / 2}
+            fill={CHART_COLORS.neutral}
+            stroke="var(--background)"
+            strokeWidth={2}
+          />
+        </g>
+      ),
+      tooltipFor: (index) => {
+        const point = points[index];
+        const ghostPoint = ghostPoints?.[index];
+        return {
+          x: xAt(index),
+          y: yAt(point.value),
+          label: point.label,
+          rows: [
+            {
+              // The frame hides names when there's only this one row.
+              name: title,
+              color: CHART_COLORS.neutral,
+              value: formatCurrency(point.value, currency),
+            },
+            ...(ghostPoint && ghost
+              ? [
+                  {
+                    name: ghost.label,
+                    color: "var(--muted-foreground)",
+                    value: formatCurrency(ghostPoint.value, currency),
+                  },
+                ]
+              : []),
+          ],
+        };
+      },
+    };
+  };
 
-      {/* X labels, thinned so they never overlap; first and last are always
-          kept. Every second one also carries `chart-x-tick-alt`, which CSS
-          drops below 480px — the whole viewBox scales down with the container,
-          so a phone needs half as many labels as the thinning maths assumes. */}
-      <g>
-        {points.map((p, i) => {
-          if (!labelIndices.has(i)) return null;
-          const x = xAt(i);
-          const anchor = i === 0 ? "start" : i === points.length - 1 ? "end" : "middle";
-          const isLast = i === points.length - 1;
-          const alt = labelOrdinal.get(i)! % 2 === 1 && !isLast;
-          return (
-            <text
-              key={p.key}
-              x={x}
-              y={height - 4}
-              textAnchor={anchor}
-              fontSize={CHART_GEOMETRY.tickFontSize}
-              fill={CHART_GEOMETRY.axisInk}
-              className={alt ? "chart-tick chart-x-tick-alt" : "chart-tick"}
-            >
-              {p.label}
-            </text>
-          );
-        })}
-      </g>
-    </svg>
-  );
+  return <ChartFrame title={title} height={height} className={className} render={render} />;
 }

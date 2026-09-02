@@ -22,6 +22,9 @@ export function CategoryPicker({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
 
+  // A native <select> sizes itself to its longest option, and a long category
+  // name is what tipped the categories page into horizontal scroll at 390px —
+  // hence the full-width-on-mobile, capped-on-desktop sizing below.
   return (
     <select
       value={selected}
@@ -30,7 +33,7 @@ export function CategoryPicker({
         const params = new URLSearchParams({ cat: e.target.value, period });
         startTransition(() => router.push(`/stats/categories?${params.toString()}`));
       }}
-      className="h-8 rounded-md border border-border bg-background px-2 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+      className="h-7 w-full max-w-full truncate rounded-md border border-border bg-background px-2 text-sm font-medium focus:ring-2 focus:ring-ring focus:outline-none disabled:opacity-60 sm:w-auto sm:max-w-xs"
       aria-label="Category"
     >
       <option value="all">All categories</option>
