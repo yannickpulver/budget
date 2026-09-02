@@ -1,12 +1,10 @@
 import type { Metadata } from "next";
-import { Plane } from "lucide-react";
 import { db } from "@/db";
 import { BarList } from "@/components/charts/bar-list";
 import { formatCurrency } from "@/lib/currency";
 import { MONTH_SHORT_NAMES, parseStatsPeriod } from "@/lib/stats-period";
 import { getTrips, type Trip } from "@/lib/stats-queries";
-import { StatsTabs } from "../tabs";
-import { EmptyNote, SectionHeading, StatsHeader, Tile } from "../ui";
+import { EmptyNote, SectionHeading, StatsPage, StatTile, Tile } from "../ui";
 
 export const metadata: Metadata = { title: "Trips · budget" };
 
@@ -39,37 +37,36 @@ export default async function TripsPage({
   const average = trips.length > 0 ? Math.round(total / trips.length) : 0;
 
   return (
-    <div className="flex flex-1 flex-col">
-      <StatsHeader icon={<Plane className="size-5 text-muted-foreground" />} title="Stats" />
-      <StatsTabs active="trips" period={period} />
+    <StatsPage
+      active="trips"
+      period={period}
+      controls={
+        <span className="text-sm text-muted-foreground">
+          All time — trips aren&apos;t period-scoped.
+        </span>
+      }
+    >
+      {trips.length === 0 ? (
+        <EmptyNote>
+          No trips yet. Trips come from the categories in a category group named
+          &ldquo;Trips&rdquo; — one category per trip.
+        </EmptyNote>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
+            <StatTile label="Trips" value={String(trips.length)} />
+            <StatTile label="Total spent" value={formatCurrency(total, currency)} />
+            <StatTile label="Avg per trip" value={formatCurrency(average, currency)} />
+          </div>
 
-      <div className="border-b border-border px-4 py-3 text-sm text-muted-foreground">
-        All time — trips aren&apos;t period-scoped.
-      </div>
-
-      <div className="px-4 py-4">
-        {trips.length === 0 ? (
-          <EmptyNote>
-            No trips yet. Trips come from the categories in a category group named
-            &ldquo;Trips&rdquo; — one category per trip.
-          </EmptyNote>
-        ) : (
-          <>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              <Tile label="Trips" value={String(trips.length)} />
-              <Tile label="Total spent" value={formatCurrency(total, currency)} />
-              <Tile label="Avg per trip" value={formatCurrency(average, currency)} />
-            </div>
-
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {trips.map((trip) => (
-                <TripCard key={trip.categoryId} trip={trip} currency={currency} />
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-    </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {trips.map((trip) => (
+              <TripCard key={trip.categoryId} trip={trip} currency={currency} />
+            ))}
+          </div>
+        </>
+      )}
+    </StatsPage>
   );
 }
 
