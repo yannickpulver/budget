@@ -21,7 +21,7 @@ export async function GET(
   const search = url.searchParams.get("search") ?? undefined;
   const limitParam = url.searchParams.get("limit");
   if (limitParam !== null && !/^[1-9]\d*$/.test(limitParam)) return json({ error: "Invalid limit." }, 400);
-  const limit = limitParam === null ? 20 : Math.min(100, Math.max(1, Number(limitParam)));
+  const limit = limitParam === null ? 20 : Math.max(1, Number(limitParam));
 
   const register = getAccountRegister(id, { search }, db);
 
