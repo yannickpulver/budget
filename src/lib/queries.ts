@@ -889,10 +889,11 @@ function registerRowMatches(row: RegisterRow, search: string): boolean {
  */
 export function getAccountRegister(
   accountId: number,
-  opts: { search?: string; page?: number; uncategorizedOnly?: boolean } = {},
+  opts: { search?: string; page?: number; pageSize?: number; uncategorizedOnly?: boolean } = {},
   dbi: DB = db
 ): RegisterPage {
   const page = Math.max(1, opts.page ?? 1);
+  const pageSize = Math.max(1, opts.pageSize ?? REGISTER_PAGE_SIZE);
   const search = opts.search?.trim().toLowerCase() ?? "";
 
   const transferAccount = alias(schema.accounts, "transfer_account");
@@ -927,13 +928,13 @@ export function getAccountRegister(
     ? rows.filter((r) => r.categoryId == null && r.transferAccountId == null)
     : rows;
   const filtered = search === "" ? scoped : scoped.filter((r) => registerRowMatches(r, search));
-  const start = (page - 1) * REGISTER_PAGE_SIZE;
+  const start = (page - 1) * pageSize;
 
   return {
-    rows: filtered.slice(start, start + REGISTER_PAGE_SIZE),
+    rows: filtered.slice(start, start + pageSize),
     total: filtered.length,
     page,
-    pageSize: REGISTER_PAGE_SIZE,
+    pageSize,
     uncategorizedTotal: rows.filter((r) => r.categoryId == null && r.transferAccountId == null).length,
   };
 }

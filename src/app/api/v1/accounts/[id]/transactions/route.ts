@@ -23,11 +23,11 @@ export async function GET(
   if (limitParam !== null && !/^[1-9]\d*$/.test(limitParam)) return json({ error: "Invalid limit." }, 400);
   const limit = limitParam === null ? 20 : Math.max(1, Number(limitParam));
 
-  const register = getAccountRegister(id, { search }, db);
+  const register = getAccountRegister(id, { search, pageSize: limit }, db);
 
   return json({
     account: { id: account.id, name: account.name },
     total: register.total,
-    rows: register.rows.slice(0, limit),
+    rows: register.rows,
   });
 }
