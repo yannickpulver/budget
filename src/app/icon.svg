@@ -1,18 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
   <rect x="1" y="1" width="30" height="30" rx="7" fill="#171717" />
-  <path
-    d="M7 11a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V11Z"
+  <g
+    transform="translate(6 6) scale(0.8333)"
     fill="none"
     stroke="#fafafa"
-    stroke-width="1.6"
-    stroke-linejoin="round"
-  />
-  <path
-    d="M7.5 10.5 16 17l8.5-6.5"
-    fill="none"
-    stroke="#fafafa"
-    stroke-width="1.6"
+    stroke-width="2"
     stroke-linecap="round"
     stroke-linejoin="round"
-  />
+  >
+    <path d="M9 5h-2a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-12a2 2 0 0 0 -2 -2h-2" />
+    <path d="M9 5a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-2a2 2 0 0 1 -2 -2z" />
+    <path d="M14 11h-2.5a1.5 1.5 0 0 0 0 3h1a1.5 1.5 0 0 1 0 3h-2.5" />
+    <path d="M12 17v1m0 -8v1" />
+  </g>
 </svg>
