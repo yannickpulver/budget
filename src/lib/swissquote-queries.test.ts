@@ -2,7 +2,13 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as schema from "@/db/schema";
-import { buildSwissquotePreview, commitSwissquoteImport, getHoldingsView, type SwissquoteRowInput } from "./queries";
+import {
+  buildSwissquotePreview,
+  commitSwissquoteImport,
+  getHoldingsView,
+  setAccountCash,
+  type SwissquoteRowInput,
+} from "./queries";
 import { parseStatementText, type ParsedStatement } from "./swissquote-import";
 
 /**
@@ -30,7 +36,9 @@ CREATE TABLE accounts (
   payment_category_id INTEGER,
   linked_category_id INTEGER,
   icon TEXT,
-  hidden_from TEXT
+  hidden_from TEXT,
+  cash INTEGER NOT NULL DEFAULT 0,
+  cash_as_of TEXT
 );
 CREATE TABLE transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -267,5 +275,47 @@ describe("commitSwissquoteImport", () => {
     expect(committed).toBe(0);
     const holdings = dbi.select().from(schema.holdings).all();
     expect(holdings[0].quantity).toBe(3);
+  });
+});
+
+describe("statement cash", () => {
+  function cashOf(dbi: ReturnType<typeof makeDb>) {
+    return getHoldingsView(TRACKING, dbi).cash;
+  }
+
+  it("previews the CHF closing balance and sets it as the account's cash on commit", () => {
+    const dbi = makeDb();
+    const preview = buildSwissquotePreview(dbi, TRACKING, [parse(fixture())]);
+    expect(preview.cash).toEqual({ asOf: "2026-01-31", amount: 14400 });
+
+    commitSwissquoteImport(dbi, TRACKING, checkedRows(preview.rows), preview.cash);
+    expect(cashOf(dbi)).toBe(14400);
+  });
+
+  it("takes the newest statement's balance when several are uploaded", () => {
+    const dbi = makeDb();
+    const january = parse(fixture());
+    const november = parse(fixture({ start: "01.11.2025", end: "30.11.2025" }));
+    const preview = buildSwissquotePreview(dbi, TRACKING, [january, november]);
+    expect(preview.cash?.asOf).toBe("2026-01-31");
+  });
+
+  it("never overwrites cash with an older statement", () => {
+    const dbi = makeDb();
+    const january = buildSwissquotePreview(dbi, TRACKING, [parse(fixture())]);
+    commitSwissquoteImport(dbi, TRACKING, checkedRows(january.rows), january.cash);
+
+    const november = parse(fixture({ start: "01.11.2025", end: "30.11.2025" }));
+    expect(buildSwissquotePreview(dbi, TRACKING, [november]).cash).toBeNull();
+
+    // Even a stale client-sent cash is refused at commit time.
+    commitSwissquoteImport(dbi, TRACKING, [], { asOf: "2025-11-30", amount: 999 });
+    expect(cashOf(dbi)).toBe(14400);
+  });
+
+  it("keeps a manual cash edit made after the statement's end", () => {
+    const dbi = makeDb();
+    setAccountCash(dbi, TRACKING, 777); // dated today, later than the 2026-01-31 fixture
+    expect(buildSwissquotePreview(dbi, TRACKING, [parse(fixture())]).cash).toBeNull();
   });
 });

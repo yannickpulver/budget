@@ -32,6 +32,14 @@ export const accounts = sqliteTable("accounts", {
   // sidebar. Viewing any earlier month still shows it. Null = never hidden.
   // Purely cosmetic — budget math and totals ignore this flag.
   hiddenFrom: text("hidden_from"),
+  // For type "tracking": uninvested cash held next to the holdings (e.g. a
+  // Swissquote cash balance), in the budget's minor units. "Sync balance"
+  // targets holdings value + cash.
+  cash: integer("cash").notNull().default(0),
+  // Date (YYYY-MM-DD) the cash amount is valid for: today for a manual edit,
+  // the statement end for an import. An import only overwrites cash when its
+  // statement is at least this recent. Null = never set.
+  cashAsOf: text("cash_as_of"),
 });
 
 export const categoryGroups = sqliteTable("category_groups", {

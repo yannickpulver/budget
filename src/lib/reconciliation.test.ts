@@ -35,7 +35,9 @@ CREATE TABLE accounts (
   payment_category_id INTEGER,
   linked_category_id INTEGER,
   icon TEXT,
-  hidden_from TEXT
+  hidden_from TEXT,
+  cash INTEGER NOT NULL DEFAULT 0,
+  cash_as_of TEXT
 );
 CREATE TABLE category_groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
