@@ -156,9 +156,10 @@ jobs:
             $(printf 'ghcr.io/yannickpulver/budget@sha256:%s ' *)
           docker buildx imagetools inspect "ghcr.io/yannickpulver/budget:$VERSION"
 
-  # Redeploys a Coolify-hosted instance once the new :latest image exists. Skipped when the
-  # COOLIFY_DEPLOY_URL secret is unset (forks, other hosts). Apply new drizzle migrations to
-  # an existing database before tagging: the app only migrates an empty database.
+  # Redeploys Coolify-hosted instances once the new :latest image exists. COOLIFY_DEPLOY_URL
+  # holds one restart URL per line, one per instance. Skipped when the secret is unset (forks,
+  # other hosts). Apply new drizzle migrations to every existing database before tagging: the
+  # app only migrates an empty database.
   deploy:
     needs: docker-manifest
     runs-on: ubuntu-latest
@@ -173,7 +174,11 @@ jobs:
             echo "COOLIFY_DEPLOY_URL is not set, skipping deploy"
             exit 0
           fi
-          curl -fsS -X POST "$COOLIFY_DEPLOY_URL" -H "Authorization: Bearer $COOLIFY_TOKEN"
+          while read -r url; do
+            [ -n "$url" ] || continue
+            curl -fsS -X POST "$url" -H "Authorization: Bearer $COOLIFY_TOKEN"
+            echo
+          done <<< "$COOLIFY_DEPLOY_URL"
 
   release:
     needs: [version, cli, docker-manifest]
