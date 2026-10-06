@@ -2227,6 +2227,10 @@ export interface HoldingsView {
   /** True if any held symbol is missing a price or stale (>24h) — triggers an on-view auto refresh. */
   needsRefresh: boolean;
   accountBalance: number;
+  /** Uninvested cash on the account (`accounts.cash`), budget minor units. */
+  cash: number;
+  /** What "Sync balance" books the account to: totalValueRappen + cash. */
+  targetBalance: number;
 }
 
 /** Everything the account page's Holdings section renders. */
@@ -2275,6 +2279,10 @@ export function getHoldingsView(accountId: number, dbi: DB = db): HoldingsView {
     };
   });
 
+  const cash =
+    dbi.select({ cash: schema.accounts.cash }).from(schema.accounts).where(eq(schema.accounts.id, accountId)).get()
+      ?.cash ?? 0;
+
   return {
     budgetCurrency: getCurrency(dbi),
     holdings,
@@ -2283,6 +2291,8 @@ export function getHoldingsView(accountId: number, dbi: DB = db): HoldingsView {
     oldestFetchedAt,
     needsRefresh,
     accountBalance: getAccountDetail(accountId, dbi)?.balance ?? 0,
+    cash,
+    targetBalance: totalValueRappen + cash,
   };
 }
 
@@ -2367,13 +2377,13 @@ export function computeSyncDelta(accountBalanceRappen: number, portfolioValueRap
 
 export type SyncBalanceResult = { ok: true; delta: number } | { ok: false; error: string };
 
-/** Book an uncategorized "Balance Adjustment" transaction so the account balance matches total holdings value. */
+/** Book an uncategorized "Balance Adjustment" transaction so the account balance matches holdings value + cash. */
 export function syncHoldingsBalance(dbi: DB, accountId: number): SyncBalanceResult {
   const view = getHoldingsView(accountId, dbi);
-  if (view.holdings.length === 0) return { ok: false, error: "No holdings to sync." };
+  if (view.holdings.length === 0 && view.cash === 0) return { ok: false, error: "No holdings or cash to sync." };
   if (!view.hasAllPrices) return { ok: false, error: "Fetch prices before syncing." };
 
-  const delta = computeSyncDelta(view.accountBalance, view.totalValueRappen);
+  const delta = computeSyncDelta(view.accountBalance, view.targetBalance);
   if (delta == null) return { ok: false, error: "Already in sync." };
 
   createTransaction(dbi, {
@@ -2381,12 +2391,21 @@ export function syncHoldingsBalance(dbi: DB, accountId: number): SyncBalanceResu
     date: new Date().toISOString().slice(0, 10),
     payee: BALANCE_ADJUSTMENT_PAYEE,
     categoryId: null,
-    memo: "Synced to holdings value",
+    memo: view.cash === 0 ? "Synced to holdings value" : "Synced to holdings + cash",
     amount: delta,
     cleared: true,
   });
 
   return { ok: true, delta };
+}
+
+/** Set a tracking account's uninvested cash by hand; dated today so an older statement import won't overwrite it. */
+export function setAccountCash(dbi: DB, accountId: number, cash: number): void {
+  dbi
+    .update(schema.accounts)
+    .set({ cash, cashAsOf: new Date().toISOString().slice(0, 10) })
+    .where(eq(schema.accounts.id, accountId))
+    .run();
 }
 
 export type SetBalanceResult = { ok: true; delta: number } | { ok: false; error: string };
@@ -2483,9 +2502,28 @@ export interface SwissquoteStatementSummary {
   periodEnd: string;
 }
 
+/** A statement's closing cash balance in the budget currency. */
+export interface StatementCash {
+  /** The section's closing ("Saldo per") date. */
+  asOf: string;
+  amount: number;
+}
+
 export interface SwissquotePreview {
   rows: SwissquotePreviewRow[];
   statements: SwissquoteStatementSummary[];
+  /** Newest statement's budget-currency closing balance; null if none, or if the account's cash is more recent. */
+  cash: StatementCash | null;
+}
+
+/** Whether a statement's cash is at least as recent as the account's current `cashAsOf`. */
+function cashIsNewer(dbi: DB, accountId: number, asOf: string): boolean {
+  const current = dbi
+    .select({ cashAsOf: schema.accounts.cashAsOf })
+    .from(schema.accounts)
+    .where(eq(schema.accounts.id, accountId))
+    .get()?.cashAsOf;
+  return current == null || asOf >= current;
 }
 
 function swissquoteStatementKey(accountId: number, statement: ParsedStatement): string {
@@ -2594,7 +2632,14 @@ export function buildSwissquotePreview(dbi: DB, accountId: number, statements: P
     }
   }
 
-  return { rows, statements: summaries };
+  let cash: StatementCash | null = null;
+  for (const statement of sorted) {
+    const section = statement.sections.find((s) => s.currency === budgetCurrency);
+    if (section) cash = { asOf: section.closingDate, amount: section.closingBalance };
+  }
+  if (cash && !cashIsNewer(dbi, accountId, cash.asOf)) cash = null;
+
+  return { rows, statements: summaries, cash };
 }
 
 export interface SwissquoteRowInput {
@@ -2622,8 +2667,21 @@ export interface SwissquoteRowInput {
  * bank's reference number) so a statement whose period overlaps an earlier
  * import doesn't double-apply the rows they share.
  */
-export function commitSwissquoteImport(dbi: DB, accountId: number, rows: SwissquoteRowInput[]): number {
+export function commitSwissquoteImport(
+  dbi: DB,
+  accountId: number,
+  rows: SwissquoteRowInput[],
+  cash: StatementCash | null = null
+): number {
   return dbi.transaction((tx) => {
+    // Statement cash, unless a more recent amount (manual edit or later statement) is already set.
+    if (cash && cashIsNewer(tx, accountId, cash.asOf)) {
+      tx.update(schema.accounts)
+        .set({ cash: cash.amount, cashAsOf: cash.asOf })
+        .where(eq(schema.accounts.id, accountId))
+        .run();
+    }
+
     const byStatement = new Map<string, SwissquoteRowInput[]>();
     for (const row of rows) {
       const group = byStatement.get(row.statementKey);

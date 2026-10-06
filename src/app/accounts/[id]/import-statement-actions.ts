@@ -4,6 +4,7 @@ import { db } from "@/db";
 import {
   buildSwissquotePreview,
   commitSwissquoteImport,
+  type StatementCash,
   type SwissquotePreviewRow,
   type SwissquoteRowInput,
 } from "@/lib/queries";
@@ -14,7 +15,7 @@ import { refresh } from "../refresh";
 export type StatementPreviewRowDto = SwissquotePreviewRow;
 
 export type PreviewStatementResult =
-  | { ok: true; rows: StatementPreviewRowDto[] }
+  | { ok: true; rows: StatementPreviewRowDto[]; cash: StatementCash | null }
   | { ok: false; errors: { file: string; message: string }[] };
 
 /**
@@ -53,19 +54,20 @@ export async function previewStatementAction(accountId: number, formData: FormDa
   if (errors.length > 0) return { ok: false, errors };
 
   const preview = buildSwissquotePreview(db, accountId, statements);
-  return { ok: true, rows: preview.rows };
+  return { ok: true, rows: preview.rows, cash: preview.cash };
 }
 
 export type ConfirmStatementResult = { ok: true; count: number } | { ok: false; error: string };
 
-/** Insert the rows the user kept checked in the preview. */
+/** Insert the rows the user kept checked in the preview, and set cash from the newest statement. */
 export async function confirmStatementAction(
   accountId: number,
-  rows: SwissquoteRowInput[]
+  rows: SwissquoteRowInput[],
+  cash: StatementCash | null
 ): Promise<ConfirmStatementResult> {
-  if (rows.length === 0) return { ok: false, error: "No rows selected." };
+  if (rows.length === 0 && !cash) return { ok: false, error: "No rows selected." };
   const count = withUndoStep(`Import ${rows.length} statement rows`, () =>
-    commitSwissquoteImport(db, accountId, rows)
+    commitSwissquoteImport(db, accountId, rows, cash)
   );
   refresh(accountId);
   return { ok: true, count };

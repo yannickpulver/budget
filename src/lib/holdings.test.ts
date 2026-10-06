@@ -10,6 +10,7 @@ import {
   getHoldingsView,
   refreshHoldingPrices,
   setAccountBalance,
+  setAccountCash,
   syncHoldingsBalance,
   updateHolding,
 } from "./queries";
@@ -37,7 +38,9 @@ CREATE TABLE accounts (
   payment_category_id INTEGER,
   linked_category_id INTEGER,
   icon TEXT,
-  hidden_from TEXT
+  hidden_from TEXT,
+  cash INTEGER NOT NULL DEFAULT 0,
+  cash_as_of TEXT
 );
 CREATE TABLE transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -296,7 +299,36 @@ describe("syncHoldingsBalance", () => {
   it("refuses to sync an account with no holdings", () => {
     const dbi = makeDb();
     const result = syncHoldingsBalance(dbi, TRACKING_ACCOUNT);
-    expect(result).toEqual({ ok: false, error: "No holdings to sync." });
+    expect(result).toEqual({ ok: false, error: "No holdings or cash to sync." });
+  });
+
+  it("syncs to holdings value plus cash", () => {
+    const dbi = makeDb();
+    seedPricedHolding(dbi);
+    setAccountCash(dbi, TRACKING_ACCOUNT, 5000);
+
+    const view = getHoldingsView(TRACKING_ACCOUNT, dbi);
+    expect(view.cash).toBe(5000);
+    expect(view.targetBalance).toBe(146220 + 5000);
+
+    expect(syncHoldingsBalance(dbi, TRACKING_ACCOUNT)).toEqual({ ok: true, delta: 151220 });
+    const txn = sqlite.prepare("SELECT memo FROM transactions WHERE account_id = ?").get(TRACKING_ACCOUNT) as { memo: string };
+    expect(txn.memo).toBe("Synced to holdings + cash");
+  });
+
+  it("syncs an account that holds only cash", () => {
+    const dbi = makeDb();
+    setAccountCash(dbi, TRACKING_ACCOUNT, 5000);
+    expect(syncHoldingsBalance(dbi, TRACKING_ACCOUNT)).toEqual({ ok: true, delta: 5000 });
+  });
+});
+
+describe("setAccountCash", () => {
+  it("stores the amount dated today", () => {
+    const dbi = makeDb();
+    setAccountCash(dbi, TRACKING_ACCOUNT, 1234);
+    const row = sqlite.prepare("SELECT cash, cash_as_of FROM accounts WHERE id = ?").get(TRACKING_ACCOUNT);
+    expect(row).toEqual({ cash: 1234, cash_as_of: new Date().toISOString().slice(0, 10) });
   });
 });
 

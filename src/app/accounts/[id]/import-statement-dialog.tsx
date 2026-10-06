@@ -13,6 +13,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { formatCurrency, formatQuantity } from "@/lib/currency";
+import type { StatementCash } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import {
   confirmStatementAction,
@@ -57,6 +58,7 @@ export function ImportStatementDialog({ accountId, currency }: { accountId: numb
   const [pending, startTransition] = useTransition();
   const [errors, setErrors] = useState<{ file: string; message: string }[] | null>(null);
   const [rows, setRows] = useState<RowState[] | null>(null);
+  const [cash, setCash] = useState<StatementCash | null>(null);
   const [importedCount, setImportedCount] = useState<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -64,6 +66,7 @@ export function ImportStatementDialog({ accountId, currency }: { accountId: numb
   function reset() {
     setErrors(null);
     setRows(null);
+    setCash(null);
     setImportedCount(null);
     setFormError(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -78,6 +81,7 @@ export function ImportStatementDialog({ accountId, currency }: { accountId: numb
     setFormError(null);
     setErrors(null);
     setRows(null);
+    setCash(null);
     setImportedCount(null);
     const formData = new FormData();
     for (const file of Array.from(files)) formData.append("files", file);
@@ -88,6 +92,7 @@ export function ImportStatementDialog({ accountId, currency }: { accountId: numb
         return;
       }
       setRows(outcome.rows.map((r) => ({ ...r, checked: defaultChecked(r) })));
+      setCash(outcome.cash);
     });
   }
 
@@ -111,7 +116,8 @@ export function ImportStatementDialog({ accountId, currency }: { accountId: numb
           name: r.name,
           payee: r.payee,
           importHash: r.importHash,
-        }))
+        })),
+        cash
       );
       if (!outcome.ok) {
         setFormError(outcome.error);
@@ -119,6 +125,7 @@ export function ImportStatementDialog({ accountId, currency }: { accountId: numb
       }
       setImportedCount(outcome.count);
       setRows(null);
+      setCash(null);
     });
   }
 
@@ -235,6 +242,12 @@ export function ImportStatementDialog({ accountId, currency }: { accountId: numb
             <p className="text-xs text-muted-foreground">
               {rows.length} row{rows.length === 1 ? "" : "s"} parsed, {checkedCount} selected to import.
             </p>
+            {cash && (
+              <p className="text-xs">
+                Cash will be set to <span className="font-medium tabular-nums">{formatCurrency(cash.amount, currency)}</span>{" "}
+                (balance on {cash.asOf}).
+              </p>
+            )}
             {formError && <p className="text-sm text-destructive">{formError}</p>}
           </div>
         )}
@@ -248,8 +261,12 @@ export function ImportStatementDialog({ accountId, currency }: { accountId: numb
         <DialogFooter>
           <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
           {rows && (
-            <Button onClick={confirm} disabled={pending || checkedCount === 0}>
-              {pending ? "Importing…" : `Import ${checkedCount} row${checkedCount === 1 ? "" : "s"}`}
+            <Button onClick={confirm} disabled={pending || (checkedCount === 0 && !cash)}>
+              {pending
+                ? "Importing…"
+                : checkedCount === 0
+                  ? "Update cash"
+                  : `Import ${checkedCount} row${checkedCount === 1 ? "" : "s"}`}
             </Button>
           )}
         </DialogFooter>

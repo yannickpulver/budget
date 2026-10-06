@@ -7,6 +7,7 @@ import { formatMoney } from "@/lib/currency";
 import type { HoldingsView } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { AddHoldingRow } from "./add-holding-row";
+import { CashRow } from "./cash-row";
 import { HoldingRow } from "./holding-row";
 import { HOLDINGS_GRID } from "./holdings-grid";
 import { refreshPricesAction, syncBalanceAction } from "./holdings-actions";
@@ -55,7 +56,7 @@ export function HoldingsSection({ accountId, view }: { accountId: number; view: 
     });
   }
 
-  const delta = view.totalValueRappen - view.accountBalance;
+  const delta = view.targetBalance - view.accountBalance;
   const inSync = delta === 0;
 
   return (
@@ -95,14 +96,15 @@ export function HoldingsSection({ accountId, view }: { accountId: number; view: 
           {view.holdings.length === 0 && (
             <div className="p-6 text-center text-sm text-muted-foreground">No holdings yet.</div>
           )}
+          <CashRow accountId={accountId} cash={view.cash} />
         </div>
       </div>
 
-      {view.holdings.length > 0 && (
+      {(view.holdings.length > 0 || view.cash !== 0) && (
         <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-md bg-muted/40 px-3 py-2 text-sm">
           <div className="flex flex-wrap items-center gap-x-4">
             <span>
-              Portfolio value: <span className="font-medium tabular-nums">{formatMoney(view.totalValueRappen)}</span>
+              Portfolio value: <span className="font-medium tabular-nums">{formatMoney(view.targetBalance)}</span>
             </span>
             <span>
               Account balance: <span className="font-medium tabular-nums">{formatMoney(view.accountBalance)}</span>

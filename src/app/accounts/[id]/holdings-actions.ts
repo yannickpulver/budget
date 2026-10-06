@@ -5,6 +5,7 @@ import {
   createHolding,
   deleteHolding,
   refreshHoldingPrices,
+  setAccountCash,
   syncHoldingsBalance,
   updateHolding,
   type HoldingInput,
@@ -80,4 +81,11 @@ export async function syncBalanceAction(accountId: number): Promise<SyncBalanceR
   const result = withUndoStep("Sync balance", () => syncHoldingsBalance(db, accountId));
   if (result.ok) refresh(accountId);
   return result;
+}
+
+export async function setCashAction(accountId: number, cash: number): Promise<ActionResult> {
+  if (!Number.isInteger(cash)) return { ok: false, error: "Not a valid amount." };
+  withUndoStep("Set cash", () => setAccountCash(db, accountId, cash));
+  refresh(accountId);
+  return { ok: true };
 }
