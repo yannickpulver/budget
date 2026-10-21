@@ -64,8 +64,9 @@ Commands:
   add <amount> <payee> [-a account] [-c category] [-d YYYY-MM-DD] [-m memo] [--inflow] [--cleared]
   edit <id> [--amount 17.50] [--inflow | --outflow] [-d YYYY-MM-DD] [-p payee] [-c category | --no-category] [-m memo] [--cleared | --uncleared]
   transfer <amount> --from <account> --to <account> [-d YYYY-MM-DD] [-m memo] [--cleared]
+  assign <amount> <category> [--from category] [--month YYYY-MM]
   undo                         Undo the last change
-  version                      Print the version
+  version                     Print the version
 
 Options:
   --json                       Print the result as JSON and nothing else
@@ -435,6 +436,39 @@ async function transfer(args: string[]): Promise<void> {
   console.log(`Transferred ${formatMoney(amount)}  ${from.name} → ${to.name}  (${payload.date})`);
 }
 
+async function assign(args: string[]): Promise<void> {
+  const options = {
+    ...commonOptions,
+    from: { type: "string" },
+    month: { type: "string" },
+  } as const;
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options });
+
+  const rawAmount = positionals[1];
+  const categoryQuery = positionals.slice(2).join(" ");
+  if (!rawAmount || categoryQuery === "") {
+    throw new Error("Usage: budget assign <amount> <category> [--from category] [--month YYYY-MM]");
+  }
+  const parsed = parseMoneyInput(rawAmount);
+  if (parsed === null || parsed <= 0) throw new Error(`Invalid amount "${rawAmount}"`);
+  const month = values.month ?? currentMonth();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error(`Invalid month "${month}" (expected YYYY-MM).`);
+
+  const { api } = connect();
+  const category = await resolveCategory(api, categoryQuery, month);
+  const from = values.from ? await resolveCategory(api, values.from, month) : null;
+
+  const payload = { month, categoryId: category.id, fromCategoryId: from?.id ?? null, amount: parsed };
+  const response = await api.post<{ ok: true }>("/assignments", payload);
+  if (values.json) return printJson({ ...payload, ...response });
+
+  const { readyToAssign } = await api.get<CategoriesResponse>(`/categories?month=${encodeURIComponent(month)}`);
+  const source = from?.qualifiedName ?? "Ready to Assign";
+  console.log(
+    `Assigned ${formatMoney(parsed)}  ${source} → ${category.qualifiedName}  (${month} · Ready to Assign ${formatMoney(readyToAssign)})`
+  );
+}
+
 async function undo(args: string[]): Promise<void> {
   const { values } = parseArgs({ args, allowPositionals: true, options: commonOptions });
   const { api } = connect();
@@ -456,6 +490,7 @@ const commands: Record<string, ((args: string[]) => void | Promise<void>) | unde
   add,
   edit,
   transfer,
+  assign,
   undo,
   version: printVersion,
 };

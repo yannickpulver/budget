@@ -269,6 +269,7 @@ budget categories [YYYY-MM]         Ready to Assign and available per category
 budget tx [account] [-n 20] [-s q]  an account's transactions
 budget add <amount> <payee> [-a account] [-c category] [-d YYYY-MM-DD] [-m memo] [--inflow] [--cleared]
 budget transfer <amount> --from <account> --to <account> [-d YYYY-MM-DD] [-m memo] [--cleared]
+budget assign <amount> <category> [--from category] [--month YYYY-MM]
 budget undo                         undo the last change
 budget logout                       forget the stored config
 budget --version                    print the installed version
